@@ -1,3 +1,5 @@
 graph_web/__pycache__/*
 lib/*
 *.pyc
+logs/*
+.env
