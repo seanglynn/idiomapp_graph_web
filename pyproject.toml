@@ -16,6 +16,8 @@ python-multipart = "^0.0.20"
 streamlit = "^1.44.1"
 streamlit-agraph = "^0.0.45"
 pyvis = "^0.3.2"
+watchfiles = "^0.22.0"
+ollama = "^0.4.7"
 
 [build-system]
 requires = ["poetry-core"]
