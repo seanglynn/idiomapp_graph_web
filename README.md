@@ -1,6 +1,6 @@
-# IdiomApp Graph Explorer
+# IdiomApp
 
-Interactive graph visualization applications with AI-powered analysis.
+WIP
 
 ## Features
 
