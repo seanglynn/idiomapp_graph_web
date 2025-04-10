@@ -1,0 +1,13 @@
+[theme]
+primaryColor = "#2D46B9"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F0F2F6"
+textColor = "#2D3748"
+font = "sans serif"
+
+[server]
+runOnSave = true
+port = 8503
+
+[logger]
+level = "INFO" 

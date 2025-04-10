@@ -3,14 +3,15 @@
 install:
 	poetry install
 
-run-fastapi: install
-	poetry run python run.py
+# TODO: 
+# run-fastapi: install
+# 	poetry run python run.py
 
 run-graph: install
-	poetry run streamlit run streamlit_app.py
+	poetry run streamlit run graph_app.py
 
 run-graph-dev: install
-	poetry run streamlit run streamlit_app.py --server.runOnSave=true
+	poetry run streamlit run graph_app.py --server.runOnSave=true
 
 init:
 	poetry shell
