@@ -8,9 +8,11 @@ import os
 import asyncio
 import html
 import base64
+import re
 from datetime import datetime
 from io import BytesIO
 from gtts import gTTS
+from langdetect import detect, LangDetectException
 from idiomapp.ollama_utils import OllamaClient, get_available_models
 from idiomapp.logging_utils import setup_logging, get_recent_logs, clear_logs
 
@@ -24,27 +26,27 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Add minimal custom styling that doesn't override theme colors
+# Add minimal custom styling that works with dark theme
 st.markdown("""
 <style>
-    /* Improve chat message readability */
+    /* Improve chat message readability for dark theme */
     .chat-message-user {
         padding: 15px !important;
         border-radius: 10px;
         margin-bottom: 15px;
-        border-left: 5px solid;
+        border-left: 5px solid #4361EE;
         white-space: pre-wrap;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        box-shadow: 0 2px 4px rgba(0,0,0,0.3);
     }
     .chat-message-ai {
         padding: 15px !important;
         border-radius: 10px;
         margin-bottom: 15px;
-        border-left: 5px solid;
+        border-left: 5px solid #4CC9F0;
         white-space: pre-wrap;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        box-shadow: 0 2px 4px rgba(0,0,0,0.3);
     }
-    /* Style the TTS button */
+    /* Style the TTS button for dark theme */
     .stButton button[data-testid^="tts_"] {
         border-radius: 50%;
         width: 40px;
@@ -52,9 +54,9 @@ st.markdown("""
         padding: 6px;
         font-size: 18px;
         margin-top: 15px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        box-shadow: 0 2px 4px rgba(0,0,0,0.4);
     }
-    /* Audio player styling */
+    /* Audio player styling for dark theme */
     audio {
         width: 100%;
         border-radius: 8px;
@@ -102,10 +104,10 @@ def visualize_graph_pyvis(G, central_node=None):
     
     logger.info(f"Visualizing graph with {len(G.nodes())} nodes and {len(G.edges())} edges")
     
-    # Create a network with better contrast colors
-    net = Network(height="600px", width="100%", bgcolor="#FFFFFF", font_color="#2D3748")
+    # Create a network with dark mode friendly colors
+    net = Network(height="600px", width="100%", bgcolor="#0E1117", font_color="#FAFAFA")
     
-    # Set options with better contrast
+    # Set options with dark theme colors
     net.barnes_hut()
     net.set_options("""
     {
@@ -113,21 +115,21 @@ def visualize_graph_pyvis(G, central_node=None):
         "borderWidth": 2,
         "borderWidthSelected": 4,
         "color": {
-          "border": "#2C3E50",
-          "background": "#3498DB"
+          "border": "#4361EE",
+          "background": "#4CC9F0"
         },
         "font": {
           "size": 16,
           "face": "Arial",
-          "color": "#2D3748"
+          "color": "#FAFAFA"
         },
         "shadow": true
       },
       "edges": {
         "color": {
-          "color": "#2C3E50",
-          "highlight": "#E74C3C",
-          "hover": "#E74C3C"
+          "color": "#AAAAAA",
+          "highlight": "#F72585",
+          "hover": "#F72585"
         },
         "smooth": false,
         "shadow": false,
@@ -156,7 +158,7 @@ def visualize_graph_pyvis(G, central_node=None):
     for node in G.nodes():
         # Special color for central node with high contrast for better focus
         if central_node is not None and node == central_node:
-            net.add_node(node, label=f"Node {node}", title=f"Node {node}", color="#E74C3C", size=30)
+            net.add_node(node, label=f"Node {node}", title=f"Node {node}", color="#F72585", size=30)
         else:
             net.add_node(node, label=f"Node {node}", title=f"Node {node}", size=25)
     
@@ -405,6 +407,46 @@ def process_message_content(message):
     # Join lines with line breaks
     return "<br>".join(content)
 
+def detect_language(text):
+    """
+    Detect language of text using langdetect library.
+    Focused on recognizing English and Spanish.
+    
+    Args:
+        text (str): The text to analyze
+        
+    Returns:
+        str: Language code ('en' or 'es')
+    """
+    try:
+        # Default to English if text is too short
+        if len(text) < 20:
+            logger.info("Text too short for reliable detection, defaulting to English")
+            return 'en'
+        
+        # Use langdetect to identify the language
+        detected_lang = detect(text)
+        
+        # Log the detected language
+        logger.info(f"Language detected: {detected_lang}")
+        
+        # For this application, only handling English and Spanish
+        # Map other languages to the closest match
+        if detected_lang == 'es':
+            logger.info(f"Detected {detected_lang}, muy bien!")
+            return 'es'  # Spanish
+        elif detected_lang == 'ca':
+            # Catalan, Portuguese, Galician are similar to Spanish
+            logger.info(f"Detected {detected_lang}, molt bé!")
+            return 'es'
+        else:
+            # Default to English for any other language
+            return 'en'
+            
+    except LangDetectException as e:
+        logger.warning(f"Language detection failed: {str(e)}. Defaulting to English.")
+        return 'en'  # Default to English in case of errors
+
 def text_to_speech(text, message_key=None):
     """
     Convert text to speech using Google Text-to-Speech and return audio player HTML
@@ -424,6 +466,9 @@ def text_to_speech(text, message_key=None):
         
         logger.info(f"Converting text to speech (length: {len(text)} characters)")
         
+        # Detect language (English or Spanish)
+        lang = detect_language(text)
+        
         # Truncate very long text to avoid errors (gTTS has limits)
         max_length = 3000
         if len(text) > max_length:
@@ -433,8 +478,8 @@ def text_to_speech(text, message_key=None):
         # Create a BytesIO object to store the audio
         audio_bytes = BytesIO()
         
-        # Generate audio from text using gTTS
-        tts = gTTS(text=text, lang='en', slow=False)
+        # Generate audio from text using gTTS with detected language
+        tts = gTTS(text=text, lang=lang, slow=False)
         tts.write_to_fp(audio_bytes)
         
         # Reset the pointer to the start of the buffer
@@ -443,10 +488,25 @@ def text_to_speech(text, message_key=None):
         # Encode the audio data as base64
         audio_base64 = base64.b64encode(audio_bytes.read()).decode()
         
-        # Create HTML for an audio player with better styling
+        # Get user-friendly language name
+        language_names = {
+            'en': 'English',
+            'es': 'Spanish',
+            'fr': 'French',
+            'de': 'German',
+            'it': 'Italian',
+            'pt': 'Portuguese',
+            'nl': 'Dutch',
+            'ja': 'Japanese',
+            'zh-cn': 'Chinese',
+            'ru': 'Russian'
+        }
+        lang_name = language_names.get(lang, lang.upper())
+        
+        # Create HTML for an audio player with dark theme styling
         audio_html = f"""
-        <div style="margin: 10px 0; padding: 10px; background-color: #f0f0f0; border-radius: 8px;">
-            <div style="font-size: 14px; margin-bottom: 5px;">🔊 Audio version:</div>
+        <div style="margin: 10px 0; padding: 10px; background-color: #262730; border-radius: 8px; border: 1px solid #4361EE;">
+            <div style="font-size: 14px; margin-bottom: 5px; color: #FAFAFA;">🔊 Audio version ({lang_name}):</div>
             <audio controls style="width: 100%; height: 40px;">
                 <source src="data:audio/mp3;base64,{audio_base64}" type="audio/mp3">
                 Your browser does not support the audio element.
@@ -454,7 +514,7 @@ def text_to_speech(text, message_key=None):
         </div>
         """
         
-        logger.info("Text-to-speech conversion successful")
+        logger.info(f"Text-to-speech conversion successful using {lang_name}")
         
         # Cache the audio if we have a key
         if message_key:
@@ -463,11 +523,11 @@ def text_to_speech(text, message_key=None):
         return audio_html
     except Exception as e:
         logger.error(f"Error in text-to-speech conversion: {str(e)}")
-        return f"<div style='color: red; padding: 10px; background-color: #ffeeee; border-radius: 8px;'>TTS Error: {str(e)}</div>"
+        return f"<div style='color: #FF5C5C; padding: 10px; background-color: #3A1C1C; border-radius: 8px; border: 1px solid #FF5C5C;'>TTS Error: {str(e)}</div>"
 
 def main():
-    # Create a cleaner header with visual distinction
-    st.markdown("<h1 style='text-align: center; color: #4361EE;'>IdiomApp Graph Explorer</h1>", unsafe_allow_html=True)
+    # Create a cleaner header with visual distinction for dark theme
+    st.markdown("<h1 style='text-align: center; color: #4CC9F0;'>IdiomApp Graph Explorer</h1>", unsafe_allow_html=True)
     
     # Initialize session state
     if "graph" not in st.session_state:
