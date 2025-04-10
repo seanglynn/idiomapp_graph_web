@@ -19,6 +19,8 @@ pyvis = "^0.3.2"
 watchfiles = "^0.22.0"
 ollama = "^0.4.7"
 python-dotenv = "^1.1.0"
+gtts = "^2.5.4"
+langdetect = "^1.0.9"
 
 [build-system]
 requires = ["poetry-core"]
