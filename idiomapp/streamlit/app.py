@@ -13,11 +13,11 @@ from datetime import datetime
 from io import BytesIO
 from gtts import gTTS
 from langdetect import detect, LangDetectException
-from idiomapp.ollama_utils import OllamaClient, get_available_models
-from idiomapp.logging_utils import setup_logging, get_recent_logs, clear_logs
+from idiomapp.utils.ollama_utils import OllamaClient, get_available_models
+from idiomapp.utils.logging_utils import setup_logging, get_recent_logs, clear_logs
 
 # Set up logging
-logger = setup_logging("graph_app")
+logger = setup_logging("streamlit_app")
 
 # Set up page configuration - use Streamlit's native theming
 st.set_page_config(

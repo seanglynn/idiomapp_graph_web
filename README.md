@@ -1,13 +1,27 @@
-# IdiomApp Visualization
+# IdiomApp Graph Explorer
 
-A Python web application that visualizes graph data using FastAPI and D3.js.
+Interactive graph visualization applications with AI-powered analysis.
 
 ## Features
 
-- Interactive graph visualization with D3.js
-- Auto-populated graph data from Python backend
-- Ability to generate new random graphs on demand
-- Zoom and pan functionality
+- **Interactive Graph Visualization**: View and manipulate graph structures with intuitive controls
+- **Streamlit Interface**: User-friendly interface for graph exploration
+- **AI-Powered Analysis**: Get insights about your graphs using Ollama LLM integration
+- **Text-to-Speech**: Listen to AI explanations with automatic language detection
+- **FastAPI Backend**: Alternative lightweight API for graph data integration
+
+## Project Structure
+
+```
+idiomapp/
+├── api/              # FastAPI application
+│   └── app.py        # FastAPI app entry point
+├── streamlit/        # Streamlit application
+│   └── app.py        # Streamlit app entry point
+└── utils/            # Shared utilities
+    ├── logging_utils.py  # Logging configuration
+    └── ollama_utils.py   # Ollama LLM integration
+```
 
 ## Installation
 
@@ -19,9 +33,27 @@ A Python web application that visualizes graph data using FastAPI and D3.js.
 make install
 ```
 
-## Running the Application
+## Running the Applications
 
-Start the FastAPI development server:
+### Streamlit Graph Explorer
+
+The main application with full features and AI integration:
+
+```bash
+make run-graph
+```
+
+For development with auto-refresh:
+
+```bash
+make run-graph-dev
+```
+
+Your browser will automatically open to the Streamlit interface (typically http://localhost:8503).
+
+### FastAPI Backend
+
+A lightweight API for graph data:
 
 ```bash
 make run-fastapi
@@ -29,25 +61,18 @@ make run-fastapi
 
 Then open your browser and navigate to http://localhost:8001
 
-## Running Streamlit Applications
+## Environment Configuration
 
-Streamlit provides an alternative way to visualize your graph data with interactive components:
+The application uses a `.env` file for configuration:
 
-1. Run the Streamlit application:
-
-```bash
-make run-graph
 ```
+# Logging configuration
+LOG_LEVEL=INFO  # Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
 
-2. Your browser will automatically open to the Streamlit app (typically at http://localhost:8501)
-
-3. For development with auto-refresh:
-
-```bash
-make run-graph-dev
+# Ollama configuration
+OLLAMA_HOST=http://127.0.0.1:11434
+DEFAULT_MODEL=llama3.2:latest
 ```
-
-This will automatically refresh the application whenever you save changes to your code.
 
 ## Working with the Poetry Environment
 
@@ -57,7 +82,13 @@ To activate the Poetry virtual environment for interactive use:
 make init
 ```
 
-This starts a new shell with the project's environment activated, allowing you to run Python commands without prefixing them with `poetry run`.
+## Development
+
+To install the project in development mode:
+
+```bash
+make install-dev
+```
 
 ## API Endpoints
 
