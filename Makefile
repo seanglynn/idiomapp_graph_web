@@ -1,17 +1,19 @@
-.PHONY: run-fastapi install run-graph run-graph-dev init
+.PHONY: install run-fastapi run-graph run-graph-dev init install-dev
 
 install:
 	poetry install
 
-# TODO: 
-# run-fastapi: install
-# 	poetry run python run.py
+run-fastapi: install
+	poetry run python -m idiomapp.api.app
 
 run-graph: install
-	poetry run streamlit run graph_app.py
+	poetry run python -m idiomapp.streamlit.app
 
 run-graph-dev: install
-	poetry run streamlit run graph_app.py --server.runOnSave=true
+	poetry run streamlit run idiomapp/streamlit/app.py --server.runOnSave=true
+
+install-dev: install
+	poetry install --with dev
 
 init:
 	poetry shell
