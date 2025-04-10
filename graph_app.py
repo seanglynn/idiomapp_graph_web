@@ -7,7 +7,10 @@ from pyvis.network import Network
 import os
 import asyncio
 import html
+import base64
 from datetime import datetime
+from io import BytesIO
+from gtts import gTTS
 from idiomapp.ollama_utils import OllamaClient, get_available_models
 from idiomapp.logging_utils import setup_logging, get_recent_logs, clear_logs
 
@@ -40,6 +43,22 @@ st.markdown("""
         border-left: 5px solid;
         white-space: pre-wrap;
         box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    /* Style the TTS button */
+    .stButton button[data-testid^="tts_"] {
+        border-radius: 50%;
+        width: 40px;
+        height: 40px;
+        padding: 6px;
+        font-size: 18px;
+        margin-top: 15px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    }
+    /* Audio player styling */
+    audio {
+        width: 100%;
+        border-radius: 8px;
+        margin-top: 10px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -317,11 +336,56 @@ def render_chat_message(message, role):
     if role == "user":
         css_class = "chat-message-user"
         prefix = "You"
+        
+        # Process and render user messages
+        formatted_content = process_message_content(message)
+        st.markdown(
+            f"""<div class='{css_class}'>
+            <strong>{prefix}:</strong> {formatted_content}
+            </div>""", 
+            unsafe_allow_html=True
+        )
     else:
         css_class = "chat-message-ai"
         prefix = "AI"
-    
-    # Process code blocks (protect them from escape)
+        
+        # For AI responses, create container with message and TTS button
+        formatted_content = process_message_content(message)
+        
+        # Create a unique key for this message
+        message_index = len(st.session_state.get("chat_history", []))
+        message_key = f"tts_{message_index}"
+        audio_key = f"audio_{message_key}"
+        
+        # Initialize the audio state if it doesn't exist
+        if audio_key not in st.session_state:
+            st.session_state[audio_key] = False
+        
+        # Create columns for the message and listen button
+        msg_col, btn_col = st.columns([9, 1])
+        
+        # Display message in the first column
+        with msg_col:
+            st.markdown(
+                f"""<div class='{css_class}'>
+                <strong>{prefix}:</strong> {formatted_content}
+                </div>""", 
+                unsafe_allow_html=True
+            )
+        
+        # Display listen button in the second column
+        with btn_col:
+            if st.button("🔊", key=message_key, help="Listen to this response"):
+                st.session_state[audio_key] = True
+        
+        # Show audio player below if the button was clicked
+        if st.session_state[audio_key]:
+            with st.spinner("Generating audio..."):
+                audio_html = text_to_speech(message, message_key)
+                st.markdown(audio_html, unsafe_allow_html=True)
+
+def process_message_content(message):
+    """Process message content to handle code blocks and HTML escaping"""
     content = []
     lines = message.split('\n')
     
@@ -339,15 +403,67 @@ def render_chat_message(message, role):
             content.append(html.escape(line))
     
     # Join lines with line breaks
-    formatted_content = "<br>".join(content)
+    return "<br>".join(content)
+
+def text_to_speech(text, message_key=None):
+    """
+    Convert text to speech using Google Text-to-Speech and return audio player HTML
     
-    # Render the message with consistent styling
-    st.markdown(
-        f"""<div class='{css_class}'>
-        <strong>{prefix}:</strong> {formatted_content}
-        </div>""", 
-        unsafe_allow_html=True
-    )
+    Args:
+        text (str): The text to convert to speech
+        message_key (str, optional): Key for caching the audio
+        
+    Returns:
+        str: HTML for an audio player with the speech
+    """
+    try:
+        # Check if we have this audio cached already
+        if message_key and message_key in st.session_state["audio_cache"]:
+            logger.info(f"Using cached audio for message {message_key}")
+            return st.session_state["audio_cache"][message_key]
+        
+        logger.info(f"Converting text to speech (length: {len(text)} characters)")
+        
+        # Truncate very long text to avoid errors (gTTS has limits)
+        max_length = 3000
+        if len(text) > max_length:
+            logger.warning(f"Text too long ({len(text)} chars), truncating to {max_length} chars")
+            text = text[:max_length] + "... (text truncated for audio)"
+        
+        # Create a BytesIO object to store the audio
+        audio_bytes = BytesIO()
+        
+        # Generate audio from text using gTTS
+        tts = gTTS(text=text, lang='en', slow=False)
+        tts.write_to_fp(audio_bytes)
+        
+        # Reset the pointer to the start of the buffer
+        audio_bytes.seek(0)
+        
+        # Encode the audio data as base64
+        audio_base64 = base64.b64encode(audio_bytes.read()).decode()
+        
+        # Create HTML for an audio player with better styling
+        audio_html = f"""
+        <div style="margin: 10px 0; padding: 10px; background-color: #f0f0f0; border-radius: 8px;">
+            <div style="font-size: 14px; margin-bottom: 5px;">🔊 Audio version:</div>
+            <audio controls style="width: 100%; height: 40px;">
+                <source src="data:audio/mp3;base64,{audio_base64}" type="audio/mp3">
+                Your browser does not support the audio element.
+            </audio>
+        </div>
+        """
+        
+        logger.info("Text-to-speech conversion successful")
+        
+        # Cache the audio if we have a key
+        if message_key:
+            st.session_state["audio_cache"][message_key] = audio_html
+            
+        return audio_html
+    except Exception as e:
+        logger.error(f"Error in text-to-speech conversion: {str(e)}")
+        return f"<div style='color: red; padding: 10px; background-color: #ffeeee; border-radius: 8px;'>TTS Error: {str(e)}</div>"
 
 def main():
     # Create a cleaner header with visual distinction
@@ -366,6 +482,8 @@ def main():
         st.session_state["view"] = "visualization"  # or "chat"
     if "show_debug" not in st.session_state:
         st.session_state["show_debug"] = False
+    if "audio_cache" not in st.session_state:
+        st.session_state["audio_cache"] = {}
     
     # Add a sidebar with clear structure for ADHD-friendly navigation
     with st.sidebar:
