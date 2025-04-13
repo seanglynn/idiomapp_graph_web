@@ -1,4 +1,4 @@
-# IdiomApp Graph Explorer
+# IdiomApp
 
 WIP
 
