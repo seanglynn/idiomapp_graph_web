@@ -1,10 +1,6 @@
-.PHONY: install run-fastapi run-graph run-graph-dev init install-dev
-
+# Local development
 install:
 	poetry install
-
-run-fastapi: install
-	poetry run python -m idiomapp.api.app
 
 run-graph: install
 	poetry run python -m idiomapp.streamlit.app
@@ -12,9 +8,18 @@ run-graph: install
 run-graph-dev: install
 	poetry run streamlit run idiomapp/streamlit/app.py --server.runOnSave=true
 
-install-dev: install
-	poetry install --with dev
+# Docker commands
+docker-start:
+	mkdir -p ollama-models logs
+	docker-compose build
+	docker-compose up
 
-init:
-	poetry shell
+docker-down:
+	docker-compose down
 
+# Debugging
+docker-shell:
+	docker exec -it idiomapp-streamlit /bin/bash
+
+ollama-shell:
+	docker exec -it idiomapp-ollama /bin/bash
