@@ -1,26 +1,30 @@
 import ollama
 import asyncio
 import time
+import os
 from typing import List, Dict, Any, Optional
 from idiomapp.logging_utils import setup_logging
 
 # Set up logging
 logger = setup_logging("ollama_utils")
 
+# Default model constant - can be overridden by environment variable
+DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "llama3.2:latest")
+
 class OllamaClient:
     """
     A utility class for interacting with Ollama models.
     """
     
-    def __init__(self, model_name: str = "llama3.2:latest"):
+    def __init__(self, model_name: str = None):
         """
         Initialize the Ollama client with a specific model.
         
         Args:
-            model_name (str): The name of the Ollama model to use. Default is "llama3.2:latest".
+            model_name (str): The name of the Ollama model to use. Defaults to DEFAULT_MODEL.
         """
-        self.model_name = model_name
-        logger.info(f"Initialized OllamaClient with model: {model_name}")
+        self.model_name = model_name or DEFAULT_MODEL
+        logger.info(f"Initialized OllamaClient with model: {self.model_name}")
     
     async def generate_text(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         """
@@ -124,7 +128,7 @@ async def list_available_models() -> List[str]:
         List[str]: A list of model names.
     """
     try:
-        logger.debug("Requesting list of available Ollama models...")
+        logger.info("Requesting list of available Ollama models...")
         models_response = ollama.list()
         available_models = []
         
@@ -141,14 +145,14 @@ async def list_available_models() -> List[str]:
         
         if not available_models:
             logger.warning(f"No models found in Ollama response: {models_response}")
-            # Return the default model we've seen in your logs
-            return ["llama3.2:latest"]
+            # Return the default model from environment
+            return [DEFAULT_MODEL]
             
-        logger.debug(f"Found {len(available_models)} Ollama models: {', '.join(available_models)}")
+        logger.info(f"Found {len(available_models)} Ollama models: {', '.join(available_models)}")
         return available_models
     except Exception as e:
         logger.error(f"Error getting Ollama models: {e}")
-        return ["llama3.2:latest"]  # Default to the model we've seen in your logs
+        return [DEFAULT_MODEL]  # Default from environment variable
 
 # Synchronous wrapper for the async function
 def get_available_models() -> List[str]:

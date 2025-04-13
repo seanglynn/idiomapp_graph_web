@@ -525,9 +525,78 @@ def text_to_speech(text, message_key=None):
         logger.error(f"Error in text-to-speech conversion: {str(e)}")
         return f"<div style='color: #FF5C5C; padding: 10px; background-color: #3A1C1C; border-radius: 8px; border: 1px solid #FF5C5C;'>TTS Error: {str(e)}</div>"
 
+# Add this function to display model status
+def display_model_status(client):
+    """Display the model download status and progress"""
+    status = client.get_model_status()
+    
+    if status["status"] == "downloading":
+        # Create a progress bar for downloading
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        # Check progress periodically
+        progress = status["download_progress"]
+        progress_bar.progress(int(progress)/100)
+        status_text.info(f"Downloading model {status['model_name']}... {progress:.1f}%")
+        
+        # Add a small wait to allow UI to update
+        import time
+        time.sleep(0.1)
+        
+        # If download just started (progress < 5%), provide additional info
+        if progress < 5:
+            st.warning("""
+            **Model download in progress.**
+            
+            This may take several minutes depending on the model size and your internet connection.
+            You can continue using the app, but AI features will not work until the download completes.
+            """)
+            
+        return False
+    elif status["status"] == "not_found":
+        st.error(f"""
+        **Model {status['model_name']} not available.**
+        
+        Error: {status['error']}
+        
+        Please start the model download manually with:
+        ```
+        docker exec -it idiomapp-ollama /bin/bash
+        ollama pull {status['model_name']}
+        ```
+        """)
+        return False
+    elif status["status"] == "unknown":
+        st.warning(f"""
+        **Model status unknown.**
+        
+        Could not determine if model {status['model_name']} is available.
+        AI features may not work correctly.
+        
+        Error: {status['error']}
+        """)
+        return False
+    elif status["status"] == "available":
+        # Only show a small success message that auto-dismisses
+        pass
+    
+    return True
+
 def main():
     # Create a cleaner header with visual distinction for dark theme
-    st.markdown("<h1 style='text-align: center; color: #4CC9F0;'>IdiomApp Graph Explorer</h1>", unsafe_allow_html=True)
+    st.title("Idiomapp - Graph Visualization & Analysis")
+    st.markdown("""
+    Create, visualize, and analyze graph structures with AI assistance.
+    """)
+    
+    # Initialize the Ollama client
+    model_name = os.environ.get("DEFAULT_MODEL", "llama3.2:latest")
+    client = OllamaClient(model_name)
+    
+    # Display model status and check if it's available
+    # This will show download progress if applicable
+    model_available = display_model_status(client)
     
     # Initialize session state
     if "graph" not in st.session_state:
@@ -544,6 +613,10 @@ def main():
         st.session_state["show_debug"] = False
     if "audio_cache" not in st.session_state:
         st.session_state["audio_cache"] = {}
+    if "model_available" not in st.session_state:
+        st.session_state["model_available"] = model_available
+    else:
+        st.session_state["model_available"] = model_available
     
     # Add a sidebar with clear structure for ADHD-friendly navigation
     with st.sidebar:
@@ -603,8 +676,17 @@ def main():
             )
             st.session_state["ollama_model"] = model_name
             
-            # Clear button for AI analysis
-            if st.button("🔍 Analyze Graph", use_container_width=True):
+            # Clear button for AI analysis - disabled if model not available
+            analyze_button = st.button(
+                "🔍 Analyze Graph", 
+                use_container_width=True,
+                disabled=not st.session_state["model_available"]
+            )
+            
+            if not st.session_state["model_available"]:
+                st.info("AI analysis is disabled until the model is available.")
+            
+            if analyze_button and st.session_state["model_available"]:
                 with st.spinner("AI is analyzing your graph..."):
                     # Run the async function in a synchronous context
                     loop = asyncio.new_event_loop()
@@ -621,18 +703,6 @@ def main():
                         st.error(f"Analysis failed: {str(e)}")
                     finally:
                         loop.close()
-            
-            # View toggle with clear visual distinction
-            view_options = ["📊 Graph View", "💬 Chat"]
-            
-            # Radio buttons with clear visual grouping
-            view_selection = st.radio(
-                "Switch View",
-                view_options,
-                index=0 if st.session_state["view"] == "visualization" else 1,
-                help="Toggle between graph view and chat interface"
-            )
-            st.session_state["view"] = "visualization" if view_selection == "📊 Graph View" else "chat"
         
         with tab3:
             # Debug toggle with clear purpose
@@ -736,43 +806,56 @@ def main():
             for message in st.session_state["chat_history"]:
                 render_chat_message(message["content"], message["role"])
         
-        # Input for new message
-        user_message = st.text_area("Your message:", height=100, placeholder="Type your question about graphs here...")
+        # Input for new message - disabled if model not available
+        user_message = st.text_area(
+            "Your message:", 
+            height=100, 
+            placeholder="Type your question about graphs here...",
+            disabled=not st.session_state["model_available"]
+        )
+        
+        if not st.session_state["model_available"]:
+            st.info("Chat is disabled until the model is available.")
         
         # Action buttons in columns for better layout
         col1, col2 = st.columns([1, 1])
         with col1:
-            if st.button("💬 Send Message", use_container_width=True):
-                if user_message:
-                    # Add user message to history
-                    st.session_state["chat_history"].append({"role": "user", "content": user_message})
-                    
-                    # Get AI response
-                    with st.spinner("AI is thinking..."):
-                        # Run the async function in a synchronous context
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
-                        try:
-                            logger.info("Creating chat event loop")
-                            ai_response = loop.run_until_complete(
-                                chat_with_ai(
-                                    st.session_state["ollama_model"],
-                                    user_message,
-                                    st.session_state["chat_history"]
-                                )
+            send_button = st.button(
+                "💬 Send Message", 
+                use_container_width=True,
+                disabled=not st.session_state["model_available"]
+            )
+            
+            if send_button and user_message and st.session_state["model_available"]:
+                # Add user message to history
+                st.session_state["chat_history"].append({"role": "user", "content": user_message})
+                
+                # Get AI response
+                with st.spinner("AI is thinking..."):
+                    # Run the async function in a synchronous context
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        logger.info("Creating chat event loop")
+                        ai_response = loop.run_until_complete(
+                            chat_with_ai(
+                                st.session_state["ollama_model"],
+                                user_message,
+                                st.session_state["chat_history"]
                             )
-                            logger.info("Chat completion successful")
-                        except Exception as e:
-                            logger.error(f"Error in chat: {str(e)}")
-                            ai_response = f"Error processing request: {str(e)}"
-                        finally:
-                            loop.close()
-                    
-                    # Add AI response to history
-                    st.session_state["chat_history"].append({"role": "assistant", "content": ai_response})
-                    
-                    # Clear input box by rerunning
-                    st.rerun()
+                        )
+                        logger.info("Chat completion successful")
+                    except Exception as e:
+                        logger.error(f"Error in chat: {str(e)}")
+                        ai_response = f"Error processing request: {str(e)}"
+                    finally:
+                        loop.close()
+                
+                # Add AI response to history
+                st.session_state["chat_history"].append({"role": "assistant", "content": ai_response})
+                
+                # Clear input box by rerunning
+                st.rerun()
         
         with col2:
             # Add button to clear chat history

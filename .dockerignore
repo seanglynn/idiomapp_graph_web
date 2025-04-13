@@ -17,7 +17,7 @@ venv.bak/
 .vscode
 .DS_Store
 **/node_modules
-ollama-models/
+ollama-models/** 
 *.md
 !README.md
 logs/
