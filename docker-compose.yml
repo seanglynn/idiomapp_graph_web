@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  streamlit:
+    build: .
+    container_name: idiomapp-streamlit
+    ports:
+      - "8503:8503"
+    volumes:
+      - .:/app
+      - ./.env:/app/.env
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    depends_on:
+      - ollama
+    networks:
+      - idiomapp-network
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: idiomapp-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ./ollama-models:/root/.ollama
+    networks:
+      - idiomapp-network
+    restart: unless-stopped
+
+networks:
+  idiomapp-network:
+    driver: bridge 
