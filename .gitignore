@@ -3,4 +3,5 @@ lib/*
 *.pyc
 logs/*
 .env
-ollama-models/id_*
+ollama-models/**
+.venv
