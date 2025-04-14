@@ -182,14 +182,49 @@ async def get_model_list(base_url):
             logger.info(f"Checking models at {base_url}{endpoint}")
             async with httpx.AsyncClient() as client:
                 response = await client.get(f"{base_url}{endpoint}", timeout=5.0)
+                
                 if response.status_code == 200:
                     data = response.json()
-                    if "models" in data and isinstance(data["models"], list):
-                        models = [model.get("name", "") for model in data["models"] if isinstance(model, dict) and "name" in model]
-                        models = [m for m in models if m]  # Filter out empty names
-                        logger.info(f"Found {len(models)} models using {endpoint}")
-                        if models:
-                            return models
+                    
+                    # Use match statement to handle different API response structures
+                    match data:
+                        case {"models": models_list} if isinstance(models_list, list):
+                            # Process models list from /api/list or /api/models endpoint
+                            models = []
+                            for model in models_list:
+                                match model:
+                                    case {"name": name} if name and isinstance(name, str):
+                                        models.append(name)
+                                    case _:
+                                        continue
+                            
+                            if models:
+                                logger.info(f"Found {len(models)} models using {endpoint}")
+                                return models
+                                
+                        case {"models": None}:
+                            logger.warning(f"API returned None for models list using {endpoint}")
+                            
+                        case {"tags": tags_list} if isinstance(tags_list, list):
+                            # Process tags list from /api/tags endpoint
+                            models = []
+                            for tag in tags_list:
+                                match tag:
+                                    case {"name": name} if name and isinstance(name, str):
+                                        models.append(name)
+                                    case _:
+                                        continue
+                                        
+                            if models:
+                                logger.info(f"Found {len(models)} models using {endpoint}")
+                                return models
+                                
+                        case {"tags": None}:
+                            logger.warning(f"API returned None for tags list using {endpoint}")
+                            
+                        case _:
+                            logger.warning(f"Unknown API response format from {endpoint}: {data}")
+                            
         except Exception as e:
             logger.warning(f"Failed to get models from {endpoint}: {str(e)}")
     
@@ -226,30 +261,54 @@ class OllamaClient:
         # Try to check if the model exists, if not, try to pull it
         try:
             models = ollama.list()
-            model_names = [model.get("name") for model in models.get("models", [])]
-            if self.model_name not in model_names:
-                self.model_status = "downloading"
-                logger.warning(f"Model {self.model_name} not found. Attempting to pull it now...")
-                try:
-                    # Try pulling the model directly 
-                    logger.info(f"Pulling model {self.model_name}...")
-                    # Pull with streaming to update progress
-                    self._pull_model_with_progress()
+            model_names = []
+            
+            # Extract model names safely using match
+            match models:
+                case {"models": model_list} if isinstance(model_list, list):
+                    for model in model_list:
+                        match model:
+                            case {"name": name} if name and isinstance(name, str):
+                                model_names.append(name)
+                            case _:
+                                continue
+                
+                case _:
+                    logger.warning(f"Unexpected model list structure: {models}")
+            
+            # Check model availability and handle accordingly
+            match (self.model_name in model_names, self.model_name):
+                case (False, model_name):
+                    self.model_status = "downloading"
+                    logger.warning(f"Model {model_name} not found. Attempting to pull it now...")
+                    try:
+                        # Try pulling the model directly 
+                        logger.info(f"Pulling model {model_name}...")
+                        # Pull with streaming to update progress
+                        self._pull_model_with_progress()
+                        self.model_status = "available"
+                        logger.info(f"Successfully pulled model {model_name}")
+                    except Exception as pull_error:
+                        # If pulling fails, inform the user how to do it manually
+                        self.model_status = "not_found"
+                        self.model_error = str(pull_error)
+                        logger.error(f"Failed to automatically pull model: {str(pull_error)}")
+                        logger.warning(f"Model {model_name} not available. You can pull it manually with: 'docker exec -it idiomapp-ollama ollama pull {model_name}'")
+                
+                case (True, _):
                     self.model_status = "available"
-                    logger.info(f"Successfully pulled model {self.model_name}")
-                except Exception as pull_error:
-                    # If pulling fails, inform the user how to do it manually
-                    self.model_status = "not_found"
-                    self.model_error = str(pull_error)
-                    logger.error(f"Failed to automatically pull model: {str(pull_error)}")
-                    logger.warning(f"Model {self.model_name} not available. You can pull it manually with: 'docker exec -it idiomapp-ollama ollama pull {self.model_name}'")
-            else:
-                self.model_status = "available"
-                logger.info(f"Model {self.model_name} is available")
+                    logger.info(f"Model {self.model_name} is available")
+                
+                case _:
+                    # Should not reach here, but handle as unknown
+                    self.model_status = "unknown"
+                    logger.warning(f"Unexpected model status check result")
+                    
         except Exception as e:
             self.model_status = "unknown"
             self.model_error = str(e)
-            logger.warning(f"Could not check or pull available models: {str(e)}")
+            logger.error(f"Error checking model availability: {str(e)}")
+            logger.warning(f"Could not determine if model {self.model_name} is available.")
     
     def _pull_model_with_progress(self):
         """
@@ -469,9 +528,37 @@ def get_available_models():
         try:
             # Use the official client
             models = ollama.list()
-            model_names = [model.get("name") for model in models.get("models", [])]
-            logger.info(f"Found {len(model_names)} models: {', '.join(model_names) if model_names else 'none'}")
-            return model_names
+            
+            # Use match statement to handle different response structures
+            match models:
+                case {"models": model_list} if isinstance(model_list, list):
+                    # Standard case: we have a models list
+                    model_names = []
+                    for model in model_list:
+                        # Safe extraction of model name
+                        match model:
+                            case {"name": name} if name and isinstance(name, str):
+                                model_names.append(name)
+                            case _:
+                                logger.warning(f"Skipping invalid model entry: {model}")
+                    
+                    logger.info(f"Found {len(model_names)} models: {', '.join(model_names) if model_names else 'none'}")
+                    return model_names if model_names else [DEFAULT_MODEL]
+                
+                case {"models": None}:
+                    # Handle the case where models key exists but is None
+                    logger.warning("API returned None for models list")
+                    return [DEFAULT_MODEL]
+                
+                case {}:
+                    # Empty response
+                    logger.warning("API returned empty response")
+                    return [DEFAULT_MODEL]
+                
+                case _:
+                    # Unknown structure
+                    logger.warning(f"Unexpected API response structure: {models}")
+                    return [DEFAULT_MODEL]
         finally:
             # Restore original environment
             if original_host:

@@ -19,7 +19,7 @@ echo "- Log level: ${LOG_LEVEL:-INFO}"
 
 # Execute the command provided (or default to streamlit run)
 if [ "$#" -eq 0 ]; then
-  exec poetry run streamlit run idiomapp/streamlit/app.py \
+  exec streamlit run idiomapp/streamlit/app.py \
     --server.headless=true \
     --server.port=${STREAMLIT_SERVER_PORT:-8503} \
     --server.address=${STREAMLIT_SERVER_ADDRESS:-0.0.0.0} \

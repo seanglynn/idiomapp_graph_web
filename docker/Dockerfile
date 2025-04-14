@@ -26,7 +26,11 @@ RUN mkdir -p /root/.streamlit
 COPY .streamlit/config.toml /root/.streamlit/config.toml
 
 # Copy application code
-COPY . .
+COPY idiomapp .
+
+# Ensure the entrypoint script is executable
+COPY docker/docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
 
 # Define build arguments with defaults
 ARG PORT=8503
@@ -53,5 +57,5 @@ ENV STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
 # Expose the port
 EXPOSE ${PORT}
 
-# Entrypoint will be mounted at runtime
+# Entrypoint 
 ENTRYPOINT ["/docker-entrypoint.sh"] 

@@ -11,6 +11,7 @@ logger = setup_logging("ollama_utils")
 # Default model constant - can be overridden by environment variable
 DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "llama3.2:latest")
 
+
 class OllamaClient:
     """
     A utility class for interacting with Ollama models.
@@ -25,6 +26,7 @@ class OllamaClient:
         """
         self.model_name = model_name or DEFAULT_MODEL
         logger.info(f"Initialized OllamaClient with model: {self.model_name}")
+    
     
     async def generate_text(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         """
