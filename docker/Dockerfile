@@ -19,28 +19,11 @@ RUN poetry config virtualenvs.create false
 # Install dependencies
 RUN poetry install --no-dev
 
-# Create Streamlit config directory and disable onboarding
+# Create directory for Streamlit configuration
 RUN mkdir -p /root/.streamlit
-RUN echo '\
-[general]\n\
-email = ""\n\
-showWarningOnDirectExecution = false\n\
-disableWatchdogWarning = true\n\
-hideTopBar = false\n\
-hideMainMenuButton = false\n\
-hideSidebarNav = true\n\
-gatherUsageStats = false\n\
-\n\
-[theme]\n\
-base = "dark"\n\
-primaryColor = "#4CC9F0"\n\
-\n\
-[server]\n\
-headless = true\n\
-runOnSave = true\n\
-enableCORS = false\n\
-enableXsrfProtection = false\n\
-' > /root/.streamlit/config.toml
+
+# Copy Streamlit configuration
+COPY .streamlit/config.toml /root/.streamlit/config.toml
 
 # Copy application code
 COPY . .

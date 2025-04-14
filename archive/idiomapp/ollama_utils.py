@@ -171,8 +171,8 @@ def get_available_models() -> List[str]:
         # Return default models if no models were found
         if not models:
             logger.warning("No models found, returning default models")
-            return ["llama3.2:latest"]
+            return [DEFAULT_MODEL]
         return models
     except Exception as e:
         logger.error(f"Error in get_available_models: {e}")
-        return ["llama3.2:latest"]  # Default 
+        return [DEFAULT_MODEL] 
