@@ -410,8 +410,8 @@ class OllamaClient:
             raise Exception(error_msg)
         except Exception as e:
             error_msg = f"Error generating text: {str(e)}"
-            logger.error(error_msg)
-            raise Exception(error_msg)
+        logger.error(error_msg)
+        raise Exception(error_msg)
     
     async def analyze_graph(self, graph_description: str) -> Dict[str, Any]:
         """
@@ -426,16 +426,16 @@ class OllamaClient:
         try:
             # Generate the analysis using the Ollama model
             analysis_text = await self.generate_text(prompt=f"""
-            Analyze this graph:
-            
-            {graph_description}
-            
-            Consider the structure, degree distribution, centrality, and any interesting patterns. 
-            Provide a clear and concise analysis of what this graph represents and its notable characteristics.
-            
-            Your response should be structured as follows:
-            1. Analysis: Detailed observations about the graph.
-            2. Summary: A brief 1-2 sentence summary of key findings.
+        Analyze this graph:
+        
+        {graph_description}
+        
+        Consider the structure, degree distribution, centrality, and any interesting patterns. 
+        Provide a clear and concise analysis of what this graph represents and its notable characteristics.
+        
+        Your response should be structured as follows:
+        1. Analysis: Detailed observations about the graph.
+        2. Summary: A brief 1-2 sentence summary of key findings.
             """)
             
             # Split the analysis into sections
@@ -473,20 +473,20 @@ class OllamaClient:
         try:
             # Generate improvement suggestions
             suggestions_text = await self.generate_text(prompt=f"""
-            Review this graph:
-            
-            {graph_description}
-            
-            Suggest 3-5 specific, actionable improvements that could be made to this graph to:
-            1. Improve its structure
-            2. Make it more robust
-            3. Optimize for better information flow
-            4. Address any weaknesses you identify
-            
-            Format your response as a numbered list of suggestions only, with each item starting with an action verb.
-            For example:
-            1. Add edges between nodes X and Y to...
-            2. Redistribute connections from the most central node to...
+        Review this graph:
+        
+        {graph_description}
+        
+        Suggest 3-5 specific, actionable improvements that could be made to this graph to:
+        1. Improve its structure
+        2. Make it more robust
+        3. Optimize for better information flow
+        4. Address any weaknesses you identify
+        
+        Format your response as a numbered list of suggestions only, with each item starting with an action verb.
+        For example:
+        1. Add edges between nodes X and Y to...
+        2. Redistribute connections from the most central node to...
             """)
             
             # Parse the numbered list from the response
