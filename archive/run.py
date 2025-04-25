@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Run script for the Idiom App application
+Run script for the application
 """
 import uvicorn
 
