@@ -5,6 +5,7 @@ Includes text-to-speech and audio processing functions.
 
 import logging
 import re
+import io
 import base64
 from typing import Dict, Optional, Any
 
@@ -76,7 +77,7 @@ def extract_translation_content(text: str, language_mark: str) -> str:
             
             # Find the end of this language section (next language marker)
             next_lang_pos = -1
-            language_markers = ["English 🇬🇧:", "Spanish 🇪🇸:", "Catalan 🇪🇸:"]
+            language_markers = ["English 🇬🇧:", "Spanish 🇪🇸:", "Catalan 🏴󠁥󠁳󠁣󠁴󠁿:"]
             for marker in language_markers:
                 if marker != language_mark and marker in content:
                     pos = content.find(marker)
@@ -86,6 +87,7 @@ def extract_translation_content(text: str, language_mark: str) -> str:
             # Extract just this language's content
             if next_lang_pos != -1:
                 content = content[:next_lang_pos].strip()
+            
             
             return content
     
@@ -101,7 +103,7 @@ def generate_audio(text: str, lang_code: Optional[str] = None) -> str:
         lang_code: Language code (en, es, ca)
         
     Returns:
-        HTML for a direct audio link
+        HTML for an embedded audio player
     """
     logger.info(f"Generating audio for text ({len(text)} chars)")
     
@@ -114,7 +116,7 @@ def generate_audio(text: str, lang_code: Optional[str] = None) -> str:
         language_markers = {
             "en": "English 🇬🇧:",
             "es": "Spanish 🇪🇸:",
-            "ca": "Catalan 🇪🇸:"
+            "ca": "Catalan 🏴󠁥󠁳󠁣󠁴󠁿:"
         }
         
         if lang_code in language_markers and any(marker in original_text for marker in language_markers.values()):
@@ -122,20 +124,29 @@ def generate_audio(text: str, lang_code: Optional[str] = None) -> str:
             language_mark = language_markers[lang_code]
             text = extract_translation_content(original_text, language_mark)
         
+        # Remove any language tag lines
+        if "(LANG TAG:" in text:
+            text_lines = text.split("\n")
+            text_lines = [line for line in text_lines if not line.strip().startswith("(LANG TAG:")]
+            text = "\n".join(text_lines).strip()
+        
         # Use the specified language or default to English
         tts_lang = TTS_LANG_CODES.get(lang_code, "en")
         
-        # Generate the audio
-        tts = gTTS(text=text, lang=tts_lang, slow=False)
-        
+        try:
+            # Generate the audio
+            tts = gTTS(text=text, lang=tts_lang, slow=False)
+        except Exception as err:
+            logger.error(f"{err.__class__.__name__} generating tts: {str(err)}")
+            raise  # Re-raise to be caught by the outer exception handler
+            
         # Convert to base64
-        import io
         mp3_fp = io.BytesIO()
         tts.write_to_fp(mp3_fp)
         mp3_fp.seek(0)
         audio_data = base64.b64encode(mp3_fp.read()).decode('utf-8')
         
-        # Create a direct link that opens in a new tab
+        # Create data URL for embedded player
         data_url = f"data:audio/mp3;base64,{audio_data}"
         
         # Get language name for the button
@@ -146,27 +157,36 @@ def generate_audio(text: str, lang_code: Optional[str] = None) -> str:
         }
         lang_name = lang_names.get(lang_code, "")
         
-        # Create a link styled as a button
-        audio_link = f"""
-        <a href="{data_url}" target="_blank" style="
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            width: 36px;
-            height: 36px;
-            border-radius: 50%;
-            background-color: rgba(67, 97, 238, 0.1);
-            border: 1px solid #4361EE;
-            color: #4361EE;
-            text-decoration: none;
-            margin: 5px;
-            font-size: 16px;
-            transition: all 0.3s ease;
-            " title="Play audio ({lang_name})">🔊</a>
+        # Create an embedded audio player with styling matching app theme
+        audio_player = f"""
+        <div style="display: flex; align-items: center; margin: 8px 0;">
+            <audio controls 
+                style="height: 36px; border-radius: 18px; outline: none; max-width: 250px;"
+                class="audio-player">
+                <source src="{data_url}" type="audio/mp3">
+                Your browser does not support the audio element.
+            </audio>
+            <span style="margin-left: 8px; font-size: 12px; color: #888;">({lang_name})</span>
+        </div>
+        <style>
+            /* Custom audio player styling */
+            audio::-webkit-media-controls-panel {{
+                background-color: rgba(67, 97, 238, 0.1);
+                border: 1px solid #4361EE;
+            }}
+            audio::-webkit-media-controls-play-button {{
+                background-color: #4361EE;
+                border-radius: 50%;
+            }}
+            audio::-webkit-media-controls-current-time-display,
+            audio::-webkit-media-controls-time-remaining-display {{
+                color: #4361EE;
+            }}
+        </style>
         """
         
-        logger.info("Audio link generated successfully")
-        return audio_link
+        logger.info("Audio player generated successfully")
+        return audio_player
     
     except Exception as e:
         logger.error(f"Error generating audio: {str(e)}")

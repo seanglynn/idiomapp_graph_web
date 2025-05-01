@@ -8,6 +8,7 @@ import httpx
 import re
 import requests
 import threading
+import logging
 
 # Set up logging
 logger = setup_logging("ollama_utils")
@@ -236,6 +237,8 @@ class OllamaClient:
     Client for interacting with Ollama models.
     Supports text generation and simple graph analysis.
     """
+    # Class-level cache to prevent excessive model checks
+    _model_available_cache = {}  # model_name -> bool
     
     def __init__(self, model_name=None):
         """
@@ -258,52 +261,102 @@ class OllamaClient:
         
         logger.info(f"Initialized OllamaClient with model: {self.model_name} at {self.base_url}")
         
-        # Try to check if the model exists, if not, try to pull it
+        # Check model availability only if not already known
+        if self.model_name not in OllamaClient._model_available_cache:
+            self._check_model_availability()
+        else:
+            is_available = OllamaClient._model_available_cache[self.model_name]
+            if is_available:
+                self.model_status = "available"
+                logger.info(f"Model {self.model_name} is available (from cache)")
+            else:
+                # If cache says not available, check again in case it's been added
+                self._check_model_availability()
+    
+    def _check_model_availability(self):
+        """
+        Check if the model is available and update the status accordingly.
+        """
         try:
-            models = ollama.list()
+            # First, try a direct check with the model name
+            try:
+                # Using the "show" command is more reliable than parsing the model list
+                model_info = ollama.show(self.model_name)
+                
+                if model_info:
+                    self.model_status = "available"
+                    logger.info(f"Model {self.model_name} is available (verified with show)")
+                    OllamaClient._model_available_cache[self.model_name] = True
+                    return
+            except Exception as show_error:
+                logger.debug(f"Model show check failed: {str(show_error)}")
+                # Continue to fallback method
+            
+            # Get list of available models
+            models_response = ollama.list()
             model_names = []
             
-            # Extract model names safely using match
-            match models:
-                case {"models": model_list} if isinstance(model_list, list):
-                    for model in model_list:
-                        match model:
-                            case {"name": name} if name and isinstance(name, str):
-                                model_names.append(name)
-                            case _:
-                                continue
+            # Extract model names using a flexible approach that works with Ollama 0.4.8+
+            try:
+                # Handle the new Ollama 0.4.8+ response format (Model objects)
+                if hasattr(models_response, 'models'):
+                    for model in models_response.models:
+                        if hasattr(model, 'model'):  # New structure uses 'model' attribute
+                            model_names.append(model.model)
+                        elif hasattr(model, 'name'):  # Older structure used 'name' attribute
+                            model_names.append(model.name)
                 
-                case _:
-                    logger.warning(f"Unexpected model list structure: {models}")
+                # Handle older dictionary-based response format
+                elif isinstance(models_response, dict) and 'models' in models_response:
+                    for model in models_response['models']:
+                        if isinstance(model, dict):
+                            if 'model' in model:
+                                model_names.append(model['model'])
+                            elif 'name' in model:
+                                model_names.append(model['name'])
+                
+                logger.info(f"Available models: {model_names}")
+                
+                # If we couldn't parse any model names but got a response, try another approach
+                if not model_names and models_response:
+                    # This is a more flexible approach for any future API changes
+                    try:
+                        # Try to extract model names using string conversion for Model objects
+                        if hasattr(models_response, 'models') and models_response.models:
+                            model_names = [str(model).split("'")[1] if "'" in str(model) else str(model) 
+                                         for model in models_response.models]
+                            logger.info(f"Extracted model names using string conversion: {model_names}")
+                    except Exception as string_error:
+                        logger.error(f"Failed to convert models to strings: {string_error}")
+            except Exception as parse_error:
+                logger.error(f"Error parsing model list: {str(parse_error)}")
+                logger.debug(f"Raw model list data: {models_response}")
             
             # Check model availability and handle accordingly
-            match (self.model_name in model_names, self.model_name):
-                case (False, model_name):
-                    self.model_status = "downloading"
-                    logger.warning(f"Model {model_name} not found. Attempting to pull it now...")
-                    try:
-                        # Try pulling the model directly 
-                        logger.info(f"Pulling model {model_name}...")
-                        # Pull with streaming to update progress
-                        self._pull_model_with_progress()
-                        self.model_status = "available"
-                        logger.info(f"Successfully pulled model {model_name}")
-                    except Exception as pull_error:
-                        # If pulling fails, inform the user how to do it manually
-                        self.model_status = "not_found"
-                        self.model_error = str(pull_error)
-                        logger.error(f"Failed to automatically pull model: {str(pull_error)}")
-                        logger.warning(f"Model {model_name} not available. You can pull it manually with: 'docker exec -it idiomapp-ollama ollama pull {model_name}'")
-                
-                case (True, _):
+            if self.model_name in model_names:
+                # Model is already available
+                self.model_status = "available"
+                logger.info(f"Model {self.model_name} is available")
+                OllamaClient._model_available_cache[self.model_name] = True
+            else:
+                # Model needs to be downloaded
+                self.model_status = "downloading"
+                logger.warning(f"Model {self.model_name} not found. Attempting to pull it now...")
+                try:
+                    # Try pulling the model directly 
+                    logger.info(f"Pulling model {self.model_name}...")
+                    # Pull with streaming to update progress
+                    self._pull_model_with_progress()
                     self.model_status = "available"
-                    logger.info(f"Model {self.model_name} is available")
-                
-                case _:
-                    # Should not reach here, but handle as unknown
-                    self.model_status = "unknown"
-                    logger.warning(f"Unexpected model status check result")
-                    
+                    logger.info(f"Successfully pulled model {self.model_name}")
+                    OllamaClient._model_available_cache[self.model_name] = True
+                except Exception as pull_error:
+                    # If pulling fails, inform the user how to do it manually
+                    self.model_status = "not_found"
+                    self.model_error = str(pull_error)
+                    logger.error(f"Failed to automatically pull model: {str(pull_error)}")
+                    logger.warning(f"Model {self.model_name} not available. You can pull it manually with: 'docker exec -it idiomapp-ollama ollama pull {self.model_name}'")
+                    OllamaClient._model_available_cache[self.model_name] = False
         except Exception as e:
             self.model_status = "unknown"
             self.model_error = str(e)
@@ -412,104 +465,6 @@ class OllamaClient:
             error_msg = f"Error generating text: {str(e)}"
         logger.error(error_msg)
         raise Exception(error_msg)
-    
-    async def analyze_graph(self, graph_description: str) -> Dict[str, Any]:
-        """
-        Analyze a graph based on its description.
-        
-        Args:
-            graph_description: Description of the graph structure
-            
-        Returns:
-            dict: Analysis results with structure and insights
-        """
-        try:
-            # Generate the analysis using the Ollama model
-            analysis_text = await self.generate_text(prompt=f"""
-        Analyze this graph:
-        
-        {graph_description}
-        
-        Consider the structure, degree distribution, centrality, and any interesting patterns. 
-        Provide a clear and concise analysis of what this graph represents and its notable characteristics.
-        
-        Your response should be structured as follows:
-        1. Analysis: Detailed observations about the graph.
-        2. Summary: A brief 1-2 sentence summary of key findings.
-            """)
-            
-            # Split the analysis into sections
-            analysis_parts = analysis_text.split("Summary:")
-            
-            if len(analysis_parts) > 1:
-                detailed_analysis = analysis_parts[0].replace("Analysis:", "").strip()
-                summary = analysis_parts[1].strip()
-            else:
-                # In case the model didn't follow the formatting
-                detailed_analysis = analysis_text
-                summary = "Analysis completed. See details for more information."
-            
-            return {
-                "analysis": detailed_analysis,
-                "summary": summary
-            }
-        except Exception as e:
-            logger.error(f"Error analyzing graph: {str(e)}")
-            return {
-                "analysis": f"Error analyzing graph: {str(e)}",
-                "summary": "Analysis failed"
-            }
-    
-    async def suggest_graph_improvements(self, graph_description: str) -> List[str]:
-        """
-        Suggest improvements for a graph based on its description.
-        
-        Args:
-            graph_description: Description of the graph structure
-            
-        Returns:
-            list: List of actionable improvement suggestions
-        """
-        try:
-            # Generate improvement suggestions
-            suggestions_text = await self.generate_text(prompt=f"""
-        Review this graph:
-        
-        {graph_description}
-        
-        Suggest 3-5 specific, actionable improvements that could be made to this graph to:
-        1. Improve its structure
-        2. Make it more robust
-        3. Optimize for better information flow
-        4. Address any weaknesses you identify
-        
-        Format your response as a numbered list of suggestions only, with each item starting with an action verb.
-        For example:
-        1. Add edges between nodes X and Y to...
-        2. Redistribute connections from the most central node to...
-            """)
-            
-            # Parse the numbered list from the response
-            lines = suggestions_text.strip().split('\n')
-            suggestions = []
-            
-            for line in lines:
-                # Look for numbered list items
-                line = line.strip()
-                if re.match(r'^\d+\.', line) or re.match(r'^-', line):
-                    # Remove the number/bullet and whitespace
-                    suggestion = re.sub(r'^\d+\.|-\s*', '', line).strip()
-                    if suggestion:
-                        suggestions.append(suggestion)
-            
-            # If no structured list was found, return the whole text
-            if not suggestions and suggestions_text.strip():
-                return [suggestions_text.strip()]
-                
-            return suggestions
-        except Exception as e:
-            logger.error(f"Error generating graph improvement suggestions: {str(e)}")
-            return [f"Error generating suggestions: {str(e)}"]
 
 # Simple function to get available models
 def get_available_models():
@@ -527,44 +482,58 @@ def get_available_models():
         
         try:
             # Use the official client
-            models = ollama.list()
+            models_response = ollama.list()
             
-            # Use match statement to handle different response structures
-            match models:
-                case {"models": model_list} if isinstance(model_list, list):
-                    # Standard case: we have a models list
-                    model_names = []
-                    for model in model_list:
-                        # Safe extraction of model name
-                        match model:
-                            case {"name": name} if name and isinstance(name, str):
-                                model_names.append(name)
-                            case _:
-                                logger.warning(f"Skipping invalid model entry: {model}")
-                    
-                    logger.info(f"Found {len(model_names)} models: {', '.join(model_names) if model_names else 'none'}")
-                    return model_names if model_names else [DEFAULT_MODEL]
+            model_names = []
+            
+            # Try to extract model names in different ways since the API structure can vary
+            # First, check if we have the standard models key
+            if hasattr(models_response, 'models'):
+                # Ollama 0.4.8+ returns Model objects in models list
+                for model in models_response.models:
+                    if hasattr(model, 'model'):  # New structure uses 'model' attribute
+                        model_names.append(model.model)
+                    elif hasattr(model, 'name'):  # Old structure used 'name' attribute
+                        model_names.append(model.name)
+            # Fallback to dictionary-style access if needed (older versions)
+            elif isinstance(models_response, dict) and 'models' in models_response:
+                for model in models_response['models']:
+                    if isinstance(model, dict):
+                        if 'model' in model:
+                            model_names.append(model['model'])
+                        elif 'name' in model:
+                            model_names.append(model['name'])
+            
+            # If we got any models, return them
+            if model_names:
+                logger.info(f"Found {len(model_names)} models: {', '.join(model_names)}")
+                return model_names
+            
+            # If no models were found but we got a response, log a warning
+            if models_response:
+                logger.warning(f"Could not extract model names from response: {models_response}")
                 
-                case {"models": None}:
-                    # Handle the case where models key exists but is None
-                    logger.warning("API returned None for models list")
-                    return [DEFAULT_MODEL]
-                
-                case {}:
-                    # Empty response
-                    logger.warning("API returned empty response")
-                    return [DEFAULT_MODEL]
-                
-                case _:
-                    # Unknown structure
-                    logger.warning(f"Unexpected API response structure: {models}")
-                    return [DEFAULT_MODEL]
+                # Last resort: try to directly access the first model if it exists
+                try:
+                    if hasattr(models_response, 'models') and models_response.models:
+                        # If the model object is string-convertible, use that
+                        model_names = [str(model).split("'")[1] if "'" in str(model) else str(model) 
+                                      for model in models_response.models]
+                        logger.info(f"Extracted model names using string conversion: {model_names}")
+                        return model_names
+                except Exception as string_error:
+                    logger.error(f"Failed to convert models to strings: {string_error}")
+            
+            logger.warning("No models found, returning default model")
+            return [DEFAULT_MODEL]
+            
         finally:
             # Restore original environment
             if original_host:
                 os.environ["OLLAMA_HOST"] = original_host
             elif "OLLAMA_HOST" in os.environ:
                 del os.environ["OLLAMA_HOST"]
+                
     except Exception as e:
         logger.error(f"Error listing models: {str(e)}")
         return [DEFAULT_MODEL]  # Return default model as fallback 

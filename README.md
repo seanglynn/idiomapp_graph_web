@@ -1,11 +1,22 @@
 # IdiomApp
+Visualizing linguistic connections through interactive graphs and networks.
 
-WIP
+![](docs/assets/aprend-er-re.png)
+
+**¿Qué es esto?** 
+- Establecer relaciones entre palabras y frases en varios idiomas.
+
+**¿Por qué?**
+- Quiero aprender idioma**s** más rápido.
+
+**¿Cómo?**
+- Con LLMs, NLP, semantic graph & co-occurrence networks obvio!
+
 
 ## Project Structure
 
 - `idiomapp/streamlit/`: Main Streamlit application
-- `idiomapp/utils/`: Utility modules for Ollama integration and logging
+- `idiomapp/utils/`: Utility modules for Ollama integration, NLP, TTS and logging
 - `archive/`: Archived code (previous FastAPI application)
 
 ## Quick Start
