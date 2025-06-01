@@ -16,7 +16,7 @@ Visualizing linguistic connections through interactive graphs and networks.
 ## Project Structure
 
 - `idiomapp/streamlit/`: Main Streamlit application
-- `idiomapp/utils/`: Utility modules for Ollama integration, NLP, TTS and logging
+- `idiomapp/utils/`: Utility modules for LLM integration, NLP, TTS and logging
 - `archive/`: Archived code (previous FastAPI application)
 
 ## Quick Start
@@ -74,9 +74,17 @@ Access the application at: http://localhost:8503
 Create a `.env` file with the following settings:
 
 ```
-# Ollama configuration
+# LLM Provider Configuration
+# Choose between "ollama" or "openai"
+LLM_PROVIDER=ollama
+
+# Ollama configuration (if using Ollama)
 OLLAMA_HOST=http://localhost:11434  # Use http://ollama:11434 for Docker
 DEFAULT_MODEL=llama3.2:latest
+
+# OpenAI configuration (if using OpenAI)
+OPENAI_API_KEY=your_openai_api_key_here
+OPENAI_MODEL=gpt-3.5-turbo
 
 # Logging
 LOG_LEVEL=INFO
@@ -92,13 +100,30 @@ STREAMLIT_SERVER_ADDRESS=localhost  # Use 0.0.0.0 for Docker
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `OLLAMA_HOST` | URL of the Ollama service | `http://localhost:11434` |
-| `DEFAULT_MODEL` | Default LLM to use if none specified | `llama3.2:latest` |
+| `LLM_PROVIDER` | LLM provider to use (`ollama` or `openai`) | `ollama` |
+| `OLLAMA_HOST` | URL of the Ollama service (when using Ollama) | `http://localhost:11434` |
+| `DEFAULT_MODEL` | Default Ollama model to use | `llama3.2:latest` |
+| `OPENAI_API_KEY` | OpenAI API key (when using OpenAI) | empty |
+| `OPENAI_MODEL` | OpenAI model to use | `gpt-3.5-turbo` |
 | `LOG_LEVEL` | Logging level | `INFO` |
 | `STREAMLIT_SERVER_PORT` | Port for Streamlit server | `8503` |
 | `STREAMLIT_SERVER_HEADLESS` | Run in headless mode | `false` |
 | `STREAMLIT_SERVER_ENABLECORS` | Enable CORS | `false` |
 | `STREAMLIT_SERVER_ADDRESS` | Bind server to address | `0.0.0.0` in Docker, `localhost` for local dev |
+
+## LLM Integration
+
+This application supports two different LLM providers:
+
+### Ollama (Default)
+
+Uses the local Ollama service with models like `llama3.2:latest`. Requires the Ollama service to be running and accessible.
+
+### OpenAI
+
+Uses OpenAI's API with models like `gpt-3.5-turbo`, `gpt-4`, etc. Requires an OpenAI API key.
+
+You can switch between providers in the UI or by setting the `LLM_PROVIDER` environment variable.
 
 ## Security Note
 

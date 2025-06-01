@@ -6,6 +6,7 @@ import sys
 import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from functools import lru_cache
 
 # Try to load dotenv if available, otherwise continue without it
 try:
@@ -28,9 +29,16 @@ LOG_LEVELS = {
 LOG_DIR = Path("logs")
 LOG_DIR.mkdir(exist_ok=True)
 
-# Get log level from environment variable
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
-log_level = LOG_LEVELS.get(LOG_LEVEL, logging.INFO)
+# Get log level - with fallback for cases where config is not available
+def _get_log_level():
+    """Get log level with fallback handling."""
+    try:
+        from idiomapp.config import settings
+        return LOG_LEVELS.get(settings.log_level.value, logging.INFO)
+    except ImportError:
+        # Handle case where config might not be available during early startup
+        LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+        return LOG_LEVELS.get(LOG_LEVEL, logging.INFO)
 
 # Keep a list of recent log messages for display in the UI
 recent_log_messages = []
@@ -49,9 +57,10 @@ class RecentLogsHandler(logging.Handler):
         except Exception:
             self.handleError(record)
 
-def setup_logging(module_name="idiomapp"):
+@lru_cache(maxsize=1)
+def get_logger(module_name="idiomapp"):
     """
-    Set up logging for the application.
+    Get or create a logger for the specified module using LRU cache for efficiency.
     
     Args:
         module_name (str): The name of the module to log for.
@@ -62,46 +71,57 @@ def setup_logging(module_name="idiomapp"):
     # Create the logger
     logger = logging.getLogger(module_name)
     
-    # Set log level from environment variable
-    logger.setLevel(log_level)
-    
-    # Remove existing handlers to prevent duplicates
-    for handler in logger.handlers[:]:
-        logger.removeHandler(handler)
-    
-    # Create formatters
-    formatter = logging.Formatter(
-        '%(asctime)s [%(name)s:%(lineno)d] %(levelname)s: %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
-    
-    # Create console handler
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
-    
-    # Create file handler - use module name for the log file
-    log_file = LOG_DIR / f"{module_name}.log"
-    file_handler = RotatingFileHandler(
-        log_file,
-        maxBytes=10 * 1024 * 1024,  # 10 MB
-        backupCount=3
-    )
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
-    
-    # Add UI log handler
-    ui_handler = RecentLogsHandler()
-    ui_handler.setFormatter(formatter)
-    logger.addHandler(ui_handler)
-    
-    # Make sure logger propagates to parent
-    logger.propagate = True
-    
-    # Log startup message to confirm logger is working
-    logger.info(f"Logger initialized for module: {module_name}")
+    # Only configure if it hasn't been configured yet
+    if not logger.handlers:
+        # Set log level from environment variable or config
+        log_level = _get_log_level()
+        logger.setLevel(log_level)
+        
+        # Create formatters
+        formatter = logging.Formatter(
+            '%(asctime)s [%(name)s:%(lineno)d] %(levelname)s: %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        
+        # Create console handler
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setFormatter(formatter)
+        logger.addHandler(console_handler)
+        
+        # Create file handler - use module name for the log file
+        log_file = LOG_DIR / f"{module_name}.log"
+        file_handler = RotatingFileHandler(
+            log_file,
+            maxBytes=10 * 1024 * 1024,  # 10 MB
+            backupCount=3
+        )
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+        
+        # Add UI log handler
+        ui_handler = RecentLogsHandler()
+        ui_handler.setFormatter(formatter)
+        logger.addHandler(ui_handler)
+        
+        # Make sure logger propagates to parent
+        logger.propagate = True
+        
+        # Log startup message to confirm logger is working
+        logger.info(f"Logger initialized for module: {module_name}")
     
     return logger
+
+def setup_logging(module_name="idiomapp"):
+    """
+    Set up logging for the application (legacy function that now uses get_logger).
+    
+    Args:
+        module_name (str): The name of the module to log for.
+        
+    Returns:
+        logging.Logger: Configured logger instance.
+    """
+    return get_logger(module_name)
 
 def get_recent_logs(max_logs=50, filter_text=None):
     """

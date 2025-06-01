@@ -25,20 +25,35 @@ Audio processing utilities including text-to-speech functionality:
 - `clean_text_for_tts`: Clean text for text-to-speech processing
 - `extract_translation_content`: Extract translation content from messages
 
-### `ollama_utils.py`
+### `llm_utils.py`
 
-Utilities for interfacing with Ollama LLM:
+Utilities for interfacing with LLM providers (Ollama, OpenAI):
 
+- `LLMClient`: Abstract base class for LLM providers
 - `OllamaClient`: Client for Ollama API
+- `OpenAIClient`: Client for OpenAI/ChatGPT API
 - `get_available_models`: Get available Ollama models
 
 ### `logging_utils.py`
 
-Utilities for logging and debugging:
+Logging utilities for the application:
 
-- `setup_logging`: Configure logging for the application
-- `get_recent_logs`: Get recent log messages
-- `clear_logs`: Clear log history
+- `get_logger`: Get or create a cached logger for the specified module (recommended)
+- `setup_logging`: Legacy function that wraps get_logger for backward compatibility
+- `get_recent_logs`: Get recent log messages for UI display
+- `clear_logs`: Clear the recent logs buffer
+
+The logging system uses LRU cache to efficiently manage logger instances and avoid repeated initialization.
+
+### Usage
+
+```python
+from idiomapp.utils.logging_utils import get_logger
+
+# Get a cached logger instance
+logger = get_logger("module_name")
+logger.info("This is a test message")
+```
 
 ## Usage
 
@@ -47,8 +62,8 @@ Import the modules as needed:
 ```python
 from idiomapp.utils.nlp_utils import analyze_parts_of_speech, split_into_sentences
 from idiomapp.utils.audio_utils import generate_audio
-from idiomapp.utils.ollama_utils import OllamaClient
-from idiomapp.utils.logging_utils import setup_logging
+from idiomapp.utils.llm_utils import LLMClient
+from idiomapp.utils.logging_utils import get_logger
 ```
 
 ## Dependencies
@@ -58,4 +73,6 @@ from idiomapp.utils.logging_utils import setup_logging
 - networkx
 - pyvis
 - gTTS (Google Text-to-Speech)
-- langdetect 
+- langdetect
+- openai
+- ollama

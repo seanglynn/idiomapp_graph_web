@@ -1,92 +1,21 @@
 import ollama
-import asyncio
 import time
 import os
-from typing import List, Dict, Any, Optional
-from idiomapp.utils.logging_utils import setup_logging
+from typing import List, Dict, Any
+from idiomapp.utils.logging_utils import get_logger
+from idiomapp.config import settings  # Import the global config
 import httpx
-import re
 import requests
 import threading
-import logging
+# Import host management functions from llm_utils to avoid duplication
+from idiomapp.utils.llm_utils import get_valid_ollama_host
 
-# Set up logging
-logger = setup_logging("ollama_utils")
+# Set up logging using the new cached logger
+logger = get_logger("ollama_utils")
 
-# Default values from environment
-DEFAULT_MODEL = os.environ.get("DEFAULT_MODEL", "llama3.2:latest")
-OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+# Use global config instead of hardcoded environment access
+DEFAULT_MODEL = settings.default_model
 
-# Define fallback hosts to try if the primary host fails
-FALLBACK_HOSTS = [
-    "http://localhost:11434",  # Local development
-    "http://ollama:11434",     # Docker service name
-    "http://host.docker.internal:11434"  # Mac/Windows Docker to host
-]
-
-def is_ollama_running():
-    """
-    Check if Ollama is running and accessible through any of the potential hosts.
-    
-    Returns:
-        tuple: (bool, str) - (is_running, host_url if running, None if not)
-    """
-    # First check the configured host
-    configured_host = OLLAMA_HOST
-    logger.info(f"Checking if Ollama is running at {configured_host}...")
-    
-    try:
-        response = requests.get(f"{configured_host}/api/version", timeout=2.0)
-        if response.status_code == 200:
-            logger.info(f"Ollama is running at {configured_host}")
-            try:
-                version_info = response.json()
-                ollama_version = version_info.get("version", "unknown")
-                logger.info(f"Ollama version: {ollama_version}")
-            except Exception:
-                logger.warning("Could not parse Ollama version information")
-            return True, configured_host
-    except Exception as e:
-        logger.warning(f"Ollama not reachable at {configured_host}: {str(e)}")
-    
-    # If primary host failed, try fallbacks
-    for host in FALLBACK_HOSTS:
-        if host == configured_host:
-            continue  # Already tried this one
-            
-        logger.info(f"Checking if Ollama is running at fallback {host}...")
-        try:
-            response = requests.get(f"{host}/api/version", timeout=2.0)
-            if response.status_code == 200:
-                logger.info(f"Ollama is running at fallback {host}")
-                try:
-                    version_info = response.json()
-                    ollama_version = version_info.get("version", "unknown")
-                    logger.info(f"Ollama version: {ollama_version}")
-                except Exception:
-                    logger.warning("Could not parse Ollama version information")
-                return True, host
-        except Exception as e:
-            logger.warning(f"Ollama not reachable at fallback {host}: {str(e)}")
-    
-    logger.error("Ollama service is not reachable at any configured host")
-    return False, None
-
-def get_valid_ollama_host():
-    """
-    Try to find a valid Ollama host by checking each potential host.
-    
-    Returns:
-        str: A valid Ollama host URL, or the default one if none work
-    """
-    # Check if Ollama is running anywhere
-    is_running, running_host = is_ollama_running()
-    if is_running:
-        return running_host
-        
-    # If all else fails, return the configured host (which will likely fail again, but it's our default)
-    logger.error("Could not find any working Ollama host, returning configured host")
-    return OLLAMA_HOST
 
 def pull_model_if_needed(model_name):
     """
@@ -249,7 +178,7 @@ class OllamaClient:
         """
         # Set the model name
         self.model_name = model_name or DEFAULT_MODEL
-        self.base_url = OLLAMA_HOST
+        self.base_url = get_valid_ollama_host()
         
         # Set up the Ollama client with the correct host
         os.environ["OLLAMA_HOST"] = self.base_url
@@ -463,8 +392,8 @@ class OllamaClient:
             raise Exception(error_msg)
         except Exception as e:
             error_msg = f"Error generating text: {str(e)}"
-        logger.error(error_msg)
-        raise Exception(error_msg)
+            logger.error(error_msg)
+            raise Exception(error_msg)
 
 # Simple function to get available models
 def get_available_models():
@@ -478,7 +407,8 @@ def get_available_models():
     try:
         # Set OLLAMA_HOST environment variable for the client
         original_host = os.environ.get("OLLAMA_HOST")
-        os.environ["OLLAMA_HOST"] = OLLAMA_HOST
+        ollama_host = get_valid_ollama_host()
+        os.environ["OLLAMA_HOST"] = ollama_host
         
         try:
             # Use the official client
