@@ -22,6 +22,7 @@ dependencies = [
     "textdistance>=4.6.3,<5",
     "openai>=1.82.1,<2",
     "pydantic-settings>=2.9.1,<3",
+    "graphiti-core>=0.18.9",
 ]
 
 [project.scripts]

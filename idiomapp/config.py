@@ -308,3 +308,77 @@ def get_supported_models() -> list:
         list: List of supported model patterns
     """
     return list(MODEL_CAPABILITIES.keys()) 
+
+# Relation type colors for graph edges
+RELATION_COLORS: Dict[str, str] = {
+    "synonym": "#00FF00",      # Green for synonyms
+    "antonym": "#FF0000",      # Red for antonyms
+    "hypernym": "#FFA500",     # Orange for hypernyms
+    "hyponym": "#FFFF00",      # Yellow for hyponyms
+    "contextual": "#00FFFF",   # Cyan for contextual
+    "common_prefix": "#A0A0FF", # Light blue for common prefix
+    "common_suffix": "#FFA0FF", # Light purple for common suffix
+    "char_similarity": "#A0FFA0", # Light green for character similarity
+    "related_term": "#A0FFFF",   # Light cyan for related terms
+    "weak_relation": "#AAAAAA"   # Gray for weak relations
+}
+
+# Language configuration constants
+LANGUAGE_MAP: Dict[str, Dict[str, str]] = {
+    "en": {"name": "English", "flag": "🇬🇧", "tts_code": "en"},
+    "es": {"name": "Spanish", "flag": "🇪🇸", "tts_code": "es"},
+    "ca": {"name": "Catalan", "flag": "🏴󠁥󠁳󠁣󠁴󠁿", "tts_code": "es", "tts_note": "(via Spanish TTS)"}
+}
+
+# TTS language mapping
+TTS_LANGUAGE_NAMES: Dict[str, str] = {
+    'en': 'English',
+    'es': 'Spanish',
+    'ca': 'Catalan (via Spanish TTS)'
+}
+
+# TTS language codes for gTTS
+TTS_LANG_CODES: Dict[str, str] = {
+    "en": "en",
+    "es": "es",
+    "ca": "es"  # Use Spanish for Catalan (gTTS limitation)
+}
+
+# Language markers for translation extraction
+LANGUAGE_MARKERS: Dict[str, str] = {
+    "en": "English 🇬🇧:",
+    "es": "Spanish 🇪🇸:",
+    "ca": "Catalan 🏴󠁥󠁳󠁣󠁴󠁿:"
+}
+
+# Part of speech border colors for visualization
+POS_BORDER_COLORS: Dict[str, str] = {
+    "noun": "#FF9500",      # Orange for nouns
+    "verb": "#4CD964",      # Green for verbs
+    "adjective": "#5AC8FA", # Blue for adjectives
+    "adverb": "#FFCC00",    # Yellow for adverbs
+    "pronoun": "#FF3B30",   # Red for pronouns
+    "preposition": "#FF2D55", # Pink for prepositions
+    "conjunction": "#5856D6", # Purple for conjunctions
+    "interjection": "#FF9500", # Orange for interjections
+    "determiner": "#C7C7CC",  # Gray for determiners
+    "unknown": "#4361EE"    # Default blue for unknown
+}
+
+# Graph group colors for different languages
+GROUP_COLORS: Dict[str, str] = {
+    "en": "#4361EE",    # Blue for English
+    "es": "#FFD700",    # Yellow for Spanish
+    "ca": "#FF3B30",    # Red for Catalan
+    "en-related": "#90E0EF",  # Light blue for English related
+    "es-related": "#FFF1A3",  # Light yellow for Spanish related
+    "ca-related": "#FF8C7C"   # Light red for Catalan related
+}
+
+# SpaCy language model mapping - Updated to use latest spaCy v3 models
+# Based on https://spacy.io/models for optimal performance and accuracy
+LANG_MODELS: Dict[str, str] = {
+    "en": "en_core_web_sm",
+    "es": "es_core_news_sm",
+    "ca": "ca_core_news_sm"
+} 

@@ -1,86 +1,774 @@
-# VibeLog - IdiomApp Development Progress
+# VibeLog - IdiomApp Development Progress & Codebase Evolution
+
+## Project Overview
+**IdiomApp** is a multi-language translation and semantic analysis application built with Streamlit, featuring LLM integration (OpenAI/Ollama), NLP processing with spaCy, and interactive graph visualization using Pyvis. The application supports English, Spanish, and Catalan with real-time translation, audio generation, and word relationship analysis.
+
+## Codebase Architecture
+
+### **Core Module Structure**
+```
+idiomapp/
+├── config.py                 # Centralized configuration with Pydantic settings
+├── streamlit/
+│   └── app.py               # Main Streamlit application and UI logic
+├── utils/
+│   ├── llm_utils.py         # Abstract LLM client interface and OpenAI implementation
+│   ├── ollama_utils.py      # Ollama-specific utility functions
+│   ├── nlp_utils.py         # NLP processing with spaCy and textacy
+│   ├── audio_utils.py       # Text-to-speech and audio processing
+│   └── state_utils.py       # Streamlit session state management
+└── docker/                  # Containerization and deployment
+```
+
+### **Key Design Patterns**
+- **Abstract Base Classes**: `LLMClient` interface with concrete `OpenAIClient` and `OllamaClient` implementations
+- **Factory Pattern**: `LLMClient.create()` method for dynamic client instantiation
+- **Configuration-Driven**: Pydantic settings with environment variable support
+- **Session State Management**: Streamlit session state for secure credential storage
+- **Error Handling Strategy**: Layered error handling with graceful degradation
+
+## 2025-08-31 - Audio Function Refactoring & Function Order Fix ✅
+
+### **Functional Changes**
+- **Consolidated Audio Functions**: Replaced `generate_audio_legacy()` and `generate_audio_new()` with single, backwards-compatible `generate_audio()` function
+- **Fixed Function Order**: Moved `text_to_speech()` to top of file to resolve "name 'text_to_speech' is not defined" error
+- **Eliminated Duplication**: Removed duplicate function definitions and circular references
+
+### **Technical Implementation**
+```python
+# Before: Multiple functions with confusing names
+def generate_audio_new(text, source_language, target_language): ...
+def generate_audio_legacy(text, lang_code): ...
+generate_audio = generate_audio_legacy  # Confusing alias
+
+# After: Single, smart function with backwards compatibility
+def generate_audio(text: str, source_language: str = "unknown", target_language: str = None) -> str:
+    # Handle backwards compatibility: if target_language is None, try to detect it
+    if target_language is None:
+        if source_language != "unknown":
+            # New calling pattern: source_language is actually the target language
+            target_language = source_language
+            source_language = "unknown"
+        else:
+            # Legacy calling pattern: try to detect language
+            detected_lang = detect_language(text)
+            target_language = detected_lang
+```
+
+### **Backwards Compatibility Logic**
+- **Legacy Calls**: `generate_audio(text, lang_code)` → automatically detects language
+- **New Calls**: `generate_audio(text, source_language, target_language)` → explicit parameters
+- **Smart Detection**: Automatically infers calling pattern based on parameter values
+
+### **Function Order Resolution**
+- **Problem**: `generate_audio()` called `text_to_speech()` before it was defined
+- **Solution**: Moved `text_to_speech()` to top of file (line 18) before `generate_audio()`
+- **Result**: Eliminated "name 'text_to_speech' is not defined" runtime error
+
+## 2025-08-31 - Configuration Consolidation & LANG_MODELS Centralization ✅
+
+### **Functional Changes**
+- **Moved LANG_MODELS**: Relocated SpaCy language model mapping from `nlp_utils.py` to `config.py`
+- **Centralized Constants**: All configuration constants now in single location
+- **Updated Imports**: `nlp_utils.py` now imports `LANG_MODELS` from central config
+
+### **Technical Implementation**
+```python
+# config.py - Added LANG_MODELS constant
+LANG_MODELS: Dict[str, str] = {
+    "en": "en_core_web_sm",
+    "es": "es_core_news_sm", 
+    "ca": "ca_core_news_sm"
+}
+
+# nlp_utils.py - Updated import
+from idiomapp.config import GROUP_COLORS as LANGUAGE_COLORS, LANG_MODELS
+
+# Usage remains the same throughout the codebase
+model_name = LANG_MODELS.get(language, "en_core_web_sm")
+```
+
+### **Benefits for LLMs**
+- **Single Source of Truth**: All constants in one location for easier code analysis
+- **Consistent Pattern**: Follows same structure as other constants like `LANGUAGE_MAP`, `TTS_LANG_CODES`
+- **Easier Maintenance**: No need to search multiple files for configuration values
+
+## 2025-08-31 - Interactive Graph Node Analysis & Simplified Click System ✅
+
+### **Functional Changes**
+- **Clickable Graph Nodes**: Users can click any word in semantic graph for analysis
+- **JavaScript Integration**: Enhanced Pyvis HTML with custom click handlers
+- **Form-Based Communication**: Simple form submission between graph and Streamlit
+- **Integrated Analysis UI**: Analysis section appears below graph when word is selected
+
+### **Technical Implementation**
+```python
+# app.py - JavaScript injection for click handling
+def enhance_graph_html(html_content: str, nodes_data: List[Dict]) -> str:
+    """Inject custom JavaScript into Pyvis HTML output"""
+    click_handler = create_click_handler(nodes_data)
+    
+    # Insert JavaScript before closing </body> tag
+    if '</body>' in html_content:
+        html_content = html_content.replace('</body>', f'{click_handler}</body>')
+    
+    return html_content
+
+def create_click_handler(nodes_data: List[Dict]) -> str:
+    """Generate JavaScript for node click handling"""
+    return f"""
+    <script>
+    // Store graph node data for click handling
+    const nodesData = {nodes_data};
+    
+    // Attach click listeners to Pyvis nodes
+    function attachClickHandlers() {{
+        const network = window.vis_network || window.__vis_network;
+        if (network) {{
+            network.on('click', function(params) {{
+                const nodeId = params.nodes[0];
+                const nodeData = nodesData.find(n => n.id === nodeId);
+                if (nodeData) {{
+                    // Show word info and submit to Streamlit
+                    alert(`Word: ${{nodeData.word}}\\nLanguage: ${{nodeData.language}}\\nPOS: ${{nodeData.pos}}`);
+                    submitWordToStreamlit(nodeData);
+                }}
+            }});
+        }}
+    }}
+    
+    // Submit word data to Streamlit via query parameters
+    function submitWordToStreamlit(wordData) {{
+        const currentUrl = new URL(window.location.href);
+        currentUrl.searchParams.set('word_analysis_request', JSON.stringify(wordData));
+        window.location.href = currentUrl.toString();
+    }}
+    
+    // Initialize when page loads
+    window.addEventListener('load', attachClickHandlers);
+    </script>
+    """
+```
+
+### **Streamlit Integration**
+```python
+# app.py - Handle word analysis requests from graph
+def main():
+    # Check for word analysis requests from graph clicks
+    word_analysis_request = st.query_params.get("word_analysis_request")
+    if word_analysis_request:
+        try:
+            word_data = json.loads(word_analysis_request)
+            st.session_state["selected_word_from_graph"] = {
+                "word": word_data.get("word", ""),
+                "language": word_data.get("language", ""),
+                "pos": word_data.get("pos", "")
+            }
+        except json.JSONDecodeError:
+            st.error("Invalid word data received from graph")
+```
+
+### **User Experience Flow**
+1. **Click Node** → JavaScript alert shows word info
+2. **Form Submission** → Word data sent to Streamlit via query parameters
+3. **Session State** → Selected word stored in Streamlit session
+4. **Analysis UI** → Analysis section appears below graph
+5. **LLM Analysis** → User clicks "Analyze Selected Word" button
+
+## 2025-08-31 - Interactive Word Analysis & Language Learning Features ✅
+
+### **Functional Changes**
+- **LLM-Powered Word Analysis**: Uses attached LLM for comprehensive linguistic analysis
+- **Rich Linguistic Data**: Verb conjugations, noun gender/plural forms, adjective agreements
+- **Educational Focus**: Designed for language learners with practical examples and grammar notes
+- **Async Processing**: Efficient handling of LLM requests for word analysis
+
+### **Technical Implementation**
+```python
+# nlp_utils.py - Core analysis function
+async def analyze_word_linguistics(word: str, language: str, client=None) -> Dict[str, Any]:
+    """Orchestrates linguistic analysis combining spaCy and LLM"""
+    
+    # Step 1: Basic spaCy analysis
+    nlp = load_spacy_model(language)
+    doc = nlp(word)
+    
+    if len(doc) > 0:
+        token = doc[0]
+        pos = token.pos_
+        lemma = token.lemma_
+    else:
+        pos = "UNKNOWN"
+        lemma = word
+    
+    # Step 2: LLM-enhanced analysis
+    llm_analysis = await _get_llm_word_analysis(word, language, pos, client)
+    
+    return {
+        "word": word,
+        "language": language,
+        "pos": pos,
+        "lemma": lemma,
+        "llm_analysis": llm_analysis
+    }
+
+# app.py - Display analysis results
+def display_word_analysis(word_data: Dict[str, Any]):
+    """Display comprehensive word analysis with expandable sections"""
+    
+    st.subheader(f"📚 Analysis: {word_data['word']} ({word_data['language'].upper()})")
+    
+    # Basic info
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Part of Speech", word_data['pos'])
+    with col2:
+        st.metric("Language", word_data['language'].upper())
+    with col3:
+        st.metric("Lemma", word_data['lemma'])
+    
+    # LLM analysis results
+    if word_data.get('llm_analysis'):
+        analysis = word_data['llm_analysis']
+        
+        # Verb analysis
+        if word_data['pos'] == 'VERB':
+            _display_verb_analysis(analysis)
+        # Noun analysis  
+        elif word_data['pos'] == 'NOUN':
+            _display_noun_analysis(analysis)
+        # Adjective analysis
+        elif word_data['pos'] == 'ADJ':
+            _display_adjective_analysis(analysis)
+        # Generic analysis
+        else:
+            _display_generic_analysis(analysis)
+```
+
+### **LLM Prompt Engineering**
+```python
+# nlp_utils.py - LLM prompts for different parts of speech
+async def _get_llm_word_analysis(word: str, language: str, pos: str, client) -> Dict[str, Any]:
+    """Generate LLM prompts tailored to part of speech"""
+    
+    if pos == "VERB":
+        prompt = f"""
+        Analyze the Spanish verb "{word}" and provide:
+        1. Infinitive form
+        2. Conjugation patterns (present, past, future)
+        3. Related forms (participles, gerunds)
+        4. Usage examples
+        5. Grammar notes
+        
+        Return as JSON with keys: infinitive, conjugations, related_forms, examples, grammar_notes
+        """
+    elif pos == "NOUN":
+        prompt = f"""
+        Analyze the Spanish noun "{word}" and provide:
+        1. Gender (masculine/feminine)
+        2. Plural form
+        3. Article usage
+        4. Cultural context
+        5. Usage examples
+        
+        Return as JSON with keys: gender, plural, articles, cultural_context, examples
+        """
+    
+    # Send to LLM and parse response
+    response = await client.generate_text(prompt)
+    try:
+        return json.loads(response)
+    except json.JSONDecodeError:
+        return {"error": "Failed to parse LLM response"}
+```
+
+## 2025-08-31 - SpaCy Model Management & Accuracy Improvements ✅
+
+### **Functional Changes**
+- **Latest spaCy v3 Models**: Updated to use `es_core_web_sm` and `ca_core_web_sm`
+- **Alternative Model Fallbacks**: Multiple model variants for better reliability
+- **Automatic Downloads**: Attempts to download missing models automatically
+- **Enhanced POS Detection**: Linguistic rules for blank models
+
+### **Technical Implementation**
+```python
+# nlp_utils.py - Enhanced model loading with fallbacks
+def load_spacy_model(language: str) -> spacy.language.Language:
+    """Load spaCy model with multiple fallback options"""
+    
+    # Get primary model name from config
+    model_name = LANG_MODELS.get(language, "en_core_web_sm")
+    
+    try:
+        # Try primary model
+        nlp = spacy.load(model_name)
+        return nlp
+    except OSError:
+        # Try alternative models
+        nlp = _try_alternative_models(language)
+        if nlp:
+            return nlp
+        
+        # Last resort - blank model with enhanced POS detection
+        logger.warning(f"Creating blank model for {language}")
+        nlp = spacy.blank(language)
+        return nlp
+
+def _try_alternative_models(language: str) -> Optional[spacy.language.Language]:
+    """Try multiple model variants for better reliability"""
+    
+    alternative_models = [
+        f"{language}_core_web_sm",
+        f"{language}_core_web_md", 
+        f"{language}_core_web_lg",
+        f"{language}_core_news_sm"
+    ]
+    
+    for model in alternative_models:
+        try:
+            nlp = spacy.load(model)
+            logger.info(f"Successfully loaded alternative model: {model}")
+            return nlp
+        except OSError:
+            continue
+    
+    return None
+
+def _improve_pos_detection(word: str, language: str) -> Optional[str]:
+    """Provide basic linguistic rules for POS detection with blank models"""
+    
+    if language == "es":  # Spanish
+        # Verb endings
+        if word.endswith(('ar', 'er', 'ir')):
+            return "VERB"
+        # Noun endings
+        if word.endswith(('o', 'a', 'e', 'ión', 'dad', 'tad')):
+            return "NOUN"
+        # Adjective endings
+        if word.endswith(('o', 'a', 'e', 'al', 'ar', 'or')):
+            return "ADJ"
+    
+    elif language == "ca":  # Catalan
+        # Similar patterns to Spanish
+        if word.endswith(('ar', 'er', 'ir', 're')):
+            return "VERB"
+        if word.endswith(('a', 'e', 'o', 'ció', 'tat')):
+            return "NOUN"
+    
+    return None
+```
+
+### **Model Status Management**
+```python
+# app.py - Model status display and management
+def display_model_status():
+    """Display SpaCy model status and management options"""
+    
+    st.sidebar.subheader("🔧 SpaCy Language Models")
+    
+    # Check model status for each language
+    for lang_code in ["en", "es", "ca"]:
+        try:
+            nlp = load_spacy_model(lang_code)
+            model_name = LANG_MODELS.get(lang_code, "unknown")
+            
+            if hasattr(nlp, 'vocab') and len(nlp.vocab) > 1000:
+                status = "✅ Full Model"
+                color = "green"
+            else:
+                status = "⚠️ Basic Model"
+                color = "orange"
+            
+            st.sidebar.markdown(f"**{lang_code.upper()}**: {status}")
+            
+        except Exception as e:
+            st.sidebar.markdown(f"**{lang_code.upper()}**: ❌ Error")
+    
+    # Management buttons
+    col1, col2 = st.sidebar.columns(2)
+    with col1:
+        if st.button("🔄 Refresh Models"):
+            ensure_models_available()
+            st.rerun()
+    
+    with col2:
+        if st.button("🗑️ Clear Cache"):
+            clear_model_cache()
+            st.rerun()
+```
 
 ## 2025-08-31 - Catalan Translation and Audio Fixes ✅
 
-### **SpaCy Model Loading Issues**
-- **Fixed Language Model Errors**: Resolved "Can't find model" errors for Catalan and other languages
-- **Textacy Integration Fix**: Updated `textacy.make_spacy_doc()` to use loaded SpaCy models instead of language codes
-- **Proper Model Handling**: The issue was that textacy expected SpaCy language objects, not language code strings
+### **Functional Changes**
+- **Fixed SpaCy Model Errors**: Resolved "Can't find model" errors for Catalan and other languages
+- **Textacy Integration Fix**: Updated to use loaded SpaCy models instead of language codes
+- **Catalan TTS Working**: Fixed "No text to speak" errors for Catalan audio generation
+- **Enhanced Debug Logging**: Better tracking of text extraction and processing
+
+### **Technical Implementation**
+```python
+# nlp_utils.py - Fixed textacy integration
+def build_cooccurrence_network(text: str, language: str, window_size: int = 2, min_freq: int = 1):
+    """Build co-occurrence network with proper SpaCy model usage"""
+    
+    # Load the appropriate SpaCy model
+    nlp = load_spacy_model(language)
+    
+    try:
+        # Use loaded model instead of language code string
+        doc = textacy.make_spacy_doc(text, lang=nlp)  # Fixed: was lang=language
+        
+        # Build network with error handling for term_filter compatibility
+        try:
+            network = textacy.representations.network.build_cooccurrence_network(
+                doc, 
+                window_size=window_size, 
+                min_freq=min_freq,
+                term_filter=lambda term: term.pos_ in ["NOUN", "VERB", "ADJ"]
+            )
+        except TypeError:
+            # Fallback for older textacy versions without term_filter
+            logger.info("term_filter not supported, using fallback")
+            network = textacy.representations.network.build_cooccurrence_network(
+                doc, 
+                window_size=window_size, 
+                min_freq=min_freq
+            )
+        
+        return network
+        
+    except Exception as e:
+        logger.error(f"Error building co-occurrence network: {str(e)}")
+        return None
+```
 
 ### **Audio Generation Fixes**
-- **Catalan TTS Working**: Fixed "No text to speak" errors for Catalan audio generation
-- **Debug Logging Added**: Enhanced logging in `extract_translation_content()` to track text extraction
-- **Text Processing**: Improved text extraction from multi-language translation messages
-
-### **Technical Details**
-- **Root Cause**: `textacy.make_spacy_doc(text, lang=language)` was called with short language codes instead of loaded SpaCy models
-- **Solution**: Changed to `textacy.make_spacy_doc(text, lang=nlp)` where `nlp` is the loaded SpaCy model
-- **Impact**: This resolves both SpaCy model errors and audio generation issues for all languages
+```python
+# audio_utils.py - Enhanced text extraction and TTS
+def extract_translation_text(full_message: str, source_language: str, target_language: str) -> str:
+    """Extract clean translation text with enhanced debugging"""
+    
+    logger.info(f"Extracting {target_language} translation from {source_language} source")
+    logger.info(f"Full message length: {len(full_message)} characters")
+    
+    # Get language marker from config
+    target_marker = LANGUAGE_MARKERS[target_language]
+    logger.info(f"Looking for marker: '{target_marker}'")
+    
+    # Split and extract content
+    parts = full_message.split(target_marker)
+    if len(parts) < 2:
+        logger.warning(f"Target language marker not found")
+        return ""
+    
+    content = parts[1].strip()
+    
+    # Find next language marker to trim content
+    next_marker_pos = -1
+    for lang_code, marker in LANGUAGE_MARKERS.items():
+        if lang_code != target_language and marker in content:
+            pos = content.find(marker)
+            if pos != -1 and (next_marker_pos == -1 or pos < next_marker_pos):
+                next_marker_pos = pos
+    
+    # Trim to next marker if found
+    if next_marker_pos != -1:
+        content = content[:next_marker_pos].strip()
+    
+    # Clean extracted content
+    content = clean_text_for_tts(content)
+    
+    logger.info(f"Final extracted text: '{content[:100]}...' (length: {len(content)})")
+    return content
+```
 
 ## 2025-08-31 - Ollama Function Consolidation & Code Organization ✅
 
-### **Function Consolidation**
-- **Moved Ollama Functions**: Consolidated all Ollama-specific functions into `idiomapp/utils/ollama_utils.py`
-- **Eliminated Duplicates**: Removed duplicate function definitions between `llm_utils.py` and `ollama_utils.py`
-- **Cleaner Separation**: Clear separation between LLM client logic and Ollama-specific utilities
-- **Updated Imports**: All references now point to the correct module locations
+### **Functional Changes**
+- **Consolidated Ollama Functions**: Moved all Ollama-specific functions to dedicated module
+- **Eliminated Duplicates**: Removed duplicate function definitions between modules
+- **Cleaner Separation**: Clear separation between LLM client logic and Ollama utilities
+- **Updated Imports**: All references now point to correct module locations
 
-### **Functions Moved**
-- **`is_ollama_running()`**: Ollama service availability checking
-- **`get_valid_ollama_host()`**: Host validation and fallback logic
-- **`get_available_models()`**: Model listing functionality
-- **`pull_model_if_needed()`**: Model download management
+### **Technical Implementation**
+```python
+# ollama_utils.py - Dedicated Ollama module
+def is_ollama_running() -> bool:
+    """Check if Ollama service is running"""
+    try:
+        response = httpx.get(f"{get_valid_ollama_host()}/api/tags", timeout=5.0)
+        return response.status_code == 200
+    except Exception:
+        return False
 
-### **Benefits**
-- **Single Source of Truth**: All Ollama functions in one dedicated module
-- **Eliminated Circular Imports**: Cleaner dependency structure
-- **Better Maintainability**: Easier to find and update Ollama-specific code
-- **Reduced Code Duplication**: No more duplicate function definitions
+def get_valid_ollama_host() -> str:
+    """Get valid Ollama host with fallbacks"""
+    hosts = [
+        "http://localhost:11434",
+        "http://127.0.0.1:11434",
+        "http://ollama:11434"  # Docker service name
+    ]
+    
+    for host in hosts:
+        try:
+            response = httpx.get(f"{host}/api/tags", timeout=2.0)
+            if response.status_code == 200:
+                return host
+        except Exception:
+            continue
+    
+    return hosts[0]  # Default fallback
+
+def get_available_models() -> List[str]:
+    """Get list of available Ollama models"""
+    try:
+        response = httpx.get(f"{get_valid_ollama_host()}/api/tags")
+        if response.status_code == 200:
+            data = response.json()
+            return [model["name"] for model in data.get("models", [])]
+    except Exception as e:
+        logger.error(f"Error getting Ollama models: {e}")
+    
+    return []
+
+def pull_model_if_needed(model_name: str) -> bool:
+    """Pull Ollama model if not already available"""
+    available_models = get_available_models()
+    
+    if model_name in available_models:
+        logger.info(f"Model {model_name} already available")
+        return True
+    
+    try:
+        logger.info(f"Pulling model {model_name}...")
+        response = httpx.post(
+            f"{get_valid_ollama_host()}/api/pull",
+            json={"name": model_name}
+        )
+        return response.status_code == 200
+    except Exception as e:
+        logger.error(f"Error pulling model {model_name}: {e}")
+        return False
+```
+
+### **Updated Imports**
+```python
+# llm_utils.py - Now imports from ollama_utils
+from idiomapp.utils.ollama_utils import (
+    is_ollama_running,
+    get_valid_ollama_host, 
+    get_available_models,
+    pull_model_if_needed
+)
+
+# app.py - Updated imports
+from idiomapp.utils.ollama_utils import get_available_models
+from idiomapp.utils.llm_utils import LLMClient, get_openai_available_models
+```
 
 ## 2025-08-31 - Major Architecture Improvement: Configuration-Driven Model Management ✅
 
-### **Model Parameter Compatibility**
-- **Fixed max_tokens vs max_completion_tokens**: Resolved compatibility issue between different OpenAI model generations
-- **Automatic Parameter Detection**: GPT-4o and Claude-3 models now automatically use `max_completion_tokens`
+### **Functional Changes**
+- **Fixed Model Parameter Compatibility**: Resolved `max_tokens` vs `max_completion_tokens` issues
+- **Automatic Parameter Detection**: GPT-4o and Claude-3 models automatically use correct parameters
 - **Legacy Model Support**: Older models continue to use `max_tokens` parameter
-- **Fallback Mechanism**: Added automatic fallback if initial parameter fails
-- **Enhanced Logging**: Better debugging information for parameter selection
+- **Fallback Mechanism**: Automatic fallback if initial parameter fails
 
 ### **Technical Implementation**
-- **Smart Parameter Selection**: Model name-based parameter detection in `OpenAIClient.generate_text()`
-- **Error Handling**: Graceful fallback from `max_tokens` to `max_completion_tokens` on parameter errors
-- **Backward Compatibility**: All existing functionality preserved while adding new model support
+```python
+# config.py - Model capabilities configuration
+MODEL_CAPABILITIES: Dict[str, Dict[str, Any]] = {
+    # GPT-5 models - strict parameter requirements
+    "gpt-5": {
+        "supports_max_completion_tokens": True,
+        "supports_custom_temperature": False,
+        "supports_custom_max_tokens": True,
+        "description": "GPT-5 model with strict parameter requirements",
+        "notes": "Only supports default temperature (1.0), uses max_completion_tokens"
+    },
+    "gpt-4o": {
+        "supports_max_completion_tokens": True,
+        "supports_custom_temperature": True,
+        "supports_custom_max_tokens": True,
+        "description": "GPT-4o model with modern parameter support",
+        "notes": "Full parameter support including custom temperature"
+    }
+}
+
+# llm_utils.py - Smart parameter selection
+def generate_text(self, prompt: str, **kwargs) -> str:
+    """Generate text with model-aware parameter selection"""
+    
+    # Get model capabilities
+    capabilities = get_model_capabilities(self.model_name)
+    
+    # Build parameters based on model capabilities
+    params = {
+        "model": self.model_name,
+        "messages": [{"role": "user", "content": prompt}]
+    }
+    
+    # Add max tokens based on model support
+    if capabilities["supports_max_completion_tokens"]:
+        params["max_completion_tokens"] = kwargs.get("max_tokens", 1024)
+    else:
+        params["max_tokens"] = kwargs.get("max_tokens", 1024)
+    
+    # Add temperature if supported
+    if capabilities["supports_custom_temperature"]:
+        params["temperature"] = kwargs.get("temperature", 0.7)
+    
+    try:
+        response = self.client.chat.completions.create(**params)
+        return response.choices[0].message.content
+    except Exception as e:
+        # Fallback: try without problematic parameters
+        if "max_completion_tokens" in params:
+            logger.warning("max_completion_tokens failed, trying max_tokens")
+            params["max_tokens"] = params.pop("max_completion_tokens")
+            try:
+                response = self.client.chat.completions.create(**params)
+                return response.choices[0].message.content
+            except Exception as fallback_error:
+                logger.error(f"Fallback also failed: {fallback_error}")
+                raise
+        raise
+```
 
 ## 2025-08-31 - Major Security & Error Handling Overhaul ✅
 
-### **Security Fixes Implemented**
-- **API Key Security**: Removed storage of OpenAI API keys in environment variables to prevent leaks
-- **Session State Isolation**: API keys now stored securely in Streamlit session state only
-- **Direct API Key Passing**: LLM client receives API key directly without touching environment variables
+### **Functional Changes**
+- **API Key Security**: Removed storage of OpenAI API keys in environment variables
+- **Session State Isolation**: API keys stored securely in Streamlit session state only
+- **Direct API Key Passing**: LLM client receives API key directly without touching environment
 - **No More UI Freezing**: Replaced `st.rerun()` with flag-based client reinitialization
 
+### **Technical Implementation**
+```python
+# app.py - Secure API key management
+def initialize_session_state():
+    """Initialize secure session state for credentials"""
+    if "openai_api_key" not in st.session_state:
+        st.session_state.openai_api_key = ""
+    if "openai_organization" not in st.session_state:
+        st.session_state.openai_organization = ""
+    if "llm_client" not in st.session_state:
+        st.session_state.llm_client = None
+    if "client_needs_reinit" not in st.session_state:
+        st.session_state.client_needs_reinit = False
+
+def handle_credential_change():
+    """Handle credential changes without UI freezing"""
+    if st.session_state.client_needs_reinit:
+        st.session_state.llm_client = None
+        st.session_state.client_needs_reinit = False
+
+# Sidebar credential inputs
+with st.sidebar:
+    st.subheader("🔑 LLM Configuration")
+    
+    # OpenAI API Key (secure input)
+    api_key = st.text_input(
+        "OpenAI API Key",
+        value=st.session_state.openai_api_key,
+        type="password",
+        help="Enter your OpenAI API key"
+    )
+    
+    # OpenAI Organization ID
+    organization = st.text_input(
+        "OpenAI Organization ID (Optional)",
+        value=st.session_state.openai_organization,
+        help="Enter your OpenAI organization ID if applicable"
+    )
+    
+    # Check for changes and trigger reinitialization
+    if (api_key != st.session_state.openai_api_key or 
+        organization != st.session_state.openai_organization):
+        st.session_state.openai_api_key = api_key
+        st.session_state.openai_organization = organization
+        st.session_state.client_needs_reinit = True
+        st.rerun()
+
+# LLM client creation with secure credentials
+def get_llm_client():
+    """Get LLM client with secure credential handling"""
+    if st.session_state.client_needs_reinit or st.session_state.llm_client is None:
+        if st.session_state.llm_provider == "openai":
+            if not st.session_state.openai_api_key:
+                st.error("Please enter your OpenAI API key")
+                return None
+            
+            client = LLMClient.create(
+                provider="openai",
+                model_name=st.session_state.openai_model,
+                api_key=st.session_state.openai_api_key,
+                organization=st.session_state.openai_organization
+            )
+            st.session_state.llm_client = client
+            st.session_state.client_needs_reinit = False
+    
+    return st.session_state.llm_client
+```
+
 ### **Error Handling System**
-- **Common Error Handler**: `handle_translation_error()` function for consistent error processing
-- **Error Separation**: Successful translations and errors are now handled separately
-- **Specific Error Messages**: 
-  - `insufficient_quota` → "⚠️ API quota exceeded. Please check your OpenAI billing and usage limits."
-  - `429` → "⚠️ Rate limit exceeded. Please wait a moment and try again."
-  - `401` → "⚠️ Authentication failed. Please check your OpenAI API key."
-  - `404` → "⚠️ Model not found. Please select a different model from the sidebar."
-- **Clean Error Display**: Errors shown in dedicated section, not mixed with translations
-- **Graceful Degradation**: App continues with successful translations even if some fail
+```python
+# app.py - Comprehensive error handling
+def handle_translation_error(error: Exception, model_name: str = "unknown") -> str:
+    """Handle common translation errors with user-friendly messages"""
+    
+    error_str = str(error).lower()
+    
+    if "insufficient_quota" in error_str:
+        return "⚠️ API quota exceeded. Please check your OpenAI billing and usage limits."
+    elif "429" in error_str or "rate limit" in error_str:
+        return "⚠️ Rate limit exceeded. Please wait a moment and try again."
+    elif "401" in error_str or "authentication" in error_str:
+        return "⚠️ Authentication failed. Please check your OpenAI API key."
+    elif "404" in error_str or "model not found" in error_str:
+        return "⚠️ Model not found. Please select a different model from the sidebar."
+    elif "max_tokens" in error_str:
+        return "⚠️ Token limit exceeded. Please try with shorter text or increase the token limit."
+    else:
+        return f"⚠️ Translation error: {str(error)}"
 
-### **LLM Integration Enhancements**
-- **Dynamic Model Discovery**: `get_openai_available_models()` fetches real-time model list from OpenAI API
-- **No More Hardcoded Models**: Models automatically discovered and filtered for relevance
-- **Smart Fallbacks**: Automatic fallback to common models if API call fails
-- **Provider Flexibility**: Seamless switching between Ollama and OpenAI
+def display_translation_error(error_message: str):
+    """Display translation errors in dedicated section"""
+    st.error(error_message)
+    st.info("💡 Tip: Check your API key, model selection, and text length.")
 
-### **Code Quality Improvements**
-- **Zero Code Duplication**: Centralized configuration using Pydantic settings
-- **Abstract LLM Interface**: `LLMClient` base class with concrete implementations
-- **Flag-Based State Management**: Efficient client reinitialization without UI blocking
-- **Comprehensive Logging**: Better error tracking and debugging capabilities
+# Translation loop with error separation
+successful_translations = []
+translation_errors = []
+
+for target_lang in target_languages:
+    try:
+        translation = await translate_text(
+            source_text, 
+            source_language, 
+            target_lang, 
+            llm_client
+        )
+        successful_translations.append((target_lang, translation))
+    except Exception as e:
+        error_message = handle_translation_error(e, llm_client.model_name if llm_client else "unknown")
+        translation_errors.append((target_lang, error_message))
+
+# Display results separately
+if successful_translations:
+    st.subheader("✅ Successful Translations")
+    for lang, translation in successful_translations:
+        render_chat_message(translation, source_lang=source_language)
+        # Generate audio for successful translations
+        audio_html = process_translation_audio(translation, source_language, lang)
+        if audio_html:
+            st.markdown(audio_html, unsafe_allow_html=True)
+
+if translation_errors:
+    st.subheader("❌ Translation Errors")
+    for lang, error in translation_errors:
+        display_translation_error(error)
+```
 
 ## 2025-08-31 - Initial Project Setup ✅
 
@@ -102,13 +790,7 @@
 - **Cross-Language Relationships**: Mapping between different language representations
 - **Interactive Graphs**: Pyvis-based network visualization with filtering
 
-### **User Experience Features**
-- **Multi-Language Support**: English, Spanish, Catalan with extensible framework
-- **Audio Generation**: Text-to-speech for translated content
-- **Real-time Updates**: Live translation and visualization updates
-- **Responsive Design**: Dark theme with modern UI components
-
-## Technical Architecture
+## Technical Architecture Summary
 
 ### **Configuration Management**
 - **Pydantic Settings**: Type-safe configuration with environment variable support
@@ -127,6 +809,12 @@
 - **Input Validation**: Robust error checking and sanitization
 - **Secure Client Initialization**: Protected credential handling
 
+### **Code Organization**
+- **Abstract Base Classes**: Clean interfaces for extensibility
+- **Factory Pattern**: Dynamic object creation based on configuration
+- **Separation of Concerns**: Clear module boundaries and responsibilities
+- **Configuration-Driven**: Behavior controlled by settings rather than hardcoded values
+
 ## Current Status: Production Ready ✅
 
 The application now provides:
@@ -136,10 +824,13 @@ The application now provides:
 - **Robust translation pipeline**
 - **Clean separation of concerns**
 - **Production-grade reliability**
+- **Interactive graph analysis**
+- **Comprehensive language learning features**
 
 ## Next Steps (Future Enhancements)
 - **Additional Language Support**: Expand beyond EN/ES/CA
-- **Advanced NLP Features**: Enhanced semantic analysis
-- **Performance Optimization**: Caching and response time improvements
-- **User Management**: Multi-user support and preferences
-- **API Endpoints**: RESTful API for external integrations
+- **Advanced NLP Features**: Enhanced semantic analysis and relationship detection
+- **Performance Optimization**: Caching, response time improvements, and batch processing
+- **User Management**: Multi-user support, preferences, and learning progress tracking
+- **API Endpoints**: RESTful API for external integrations and mobile apps
+- **Advanced Analytics**: Learning progress tracking and vocabulary building insights

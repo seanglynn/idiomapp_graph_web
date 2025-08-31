@@ -17,26 +17,14 @@ from textacy.representations.network import build_cooccurrence_network
 import networkx as nx
 from pyvis.network import Network
 from langdetect import detect, LangDetectException
+# Color scheme imported from central config
+from idiomapp.config import GROUP_COLORS as LANGUAGE_COLORS, LANG_MODELS
 
 # Setup logging
 logger = logging.getLogger(__name__)
 
-# Language model mapping
-LANG_MODELS = {
-    "en": "en_core_web_sm",
-    "es": "es_core_news_sm",
-    "ca": "ca_core_news_sm"
-}
 
-# Color scheme for languages (shared between functions)
-LANGUAGE_COLORS = {
-    "en": "#4361EE",  # Blue for English
-    "es": "#FFD700",  # Yellow for Spanish
-    "ca": "#FF3B30",  # Red for Catalan
-    "en-related": "#90E0EF",  # Light blue for English related
-    "es-related": "#FFF1A3",  # Light yellow for Spanish related
-    "ca-related": "#FF8C7C"   # Light red for Catalan related
-}
+
 
 def get_language_color(lang_code: str, is_related: bool = False) -> str:
     """
@@ -112,6 +100,11 @@ def load_spacy_model(language: str) -> spacy.language.Language:
                 return nlp
             except Exception as load_error:
                 logger.error(f"Error loading model after download: {str(load_error)}")
+                # Try alternative models as fallback
+                nlp = _try_alternative_models(language)
+                if nlp:
+                    _MODEL_CACHE[language] = nlp
+                    return nlp
                 # Last resort - create a blank model
                 logger.warning(f"Creating blank model for {language}")
                 nlp = spacy.blank(language)
@@ -119,12 +112,147 @@ def load_spacy_model(language: str) -> spacy.language.Language:
                 return nlp
                 
         except Exception as download_error:
-            # If downloading failed, create a blank model
-            logger.error(f"Error downloading {model_name}: {str(download_error)}. Creating blank model.")
+            # If downloading failed, try alternative models
+            logger.error(f"Error downloading {model_name}: {str(download_error)}. Trying alternative models.")
+            nlp = _try_alternative_models(language)
+            if nlp:
+                _MODEL_CACHE[language] = nlp
+                return nlp
+            # Last resort - create a blank model
             nlp = spacy.blank(language)
             logger.warning(f"Created blank model for {language} as fallback")
             _MODEL_CACHE[language] = nlp
             return nlp
+
+def _try_alternative_models(language: str) -> Optional[spacy.language.Language]:
+    """
+    Try to load alternative SpaCy models for a language.
+    
+    Args:
+        language: ISO language code
+        
+    Returns:
+        Loaded SpaCy model or None if all alternatives fail
+    """
+    # Alternative model mappings for better fallback
+    # Based on https://spacy.io/models - using web-trained models for better general text handling
+    alternative_models = {
+        "es": ["es_core_web_sm", "es_core_web_md", "es_core_web_lg", "es_core_news_sm"],
+        "ca": ["ca_core_web_sm", "ca_core_web_md", "ca_core_web_lg", "ca_core_news_sm"],
+        "en": ["en_core_web_md", "en_core_web_lg", "en_core_web_trf", "en_core_news_sm"]
+    }
+    
+    alternatives = alternative_models.get(language, [])
+    
+    for alt_model in alternatives:
+        try:
+            logger.info(f"Trying alternative model: {alt_model}")
+            nlp = spacy.load(alt_model)
+            logger.info(f"Successfully loaded alternative model: {alt_model}")
+            return nlp
+        except OSError:
+            logger.warning(f"Alternative model {alt_model} not available")
+            continue
+    
+    # If no alternatives work, try downloading a smaller model
+    try:
+        fallback_model = f"{language}_core_web_sm"
+        logger.info(f"Attempting to download fallback model: {fallback_model}")
+        spacy.cli.download(fallback_model)
+        nlp = spacy.load(fallback_model)
+        logger.info(f"Successfully loaded fallback model: {fallback_model}")
+        return nlp
+    except Exception as e:
+        logger.error(f"Failed to load fallback model {fallback_model}: {e}")
+        return None
+
+def clear_model_cache():
+    """Clear the SpaCy model cache to force reloading of models."""
+    global _MODEL_CACHE
+    _MODEL_CACHE.clear()
+    logger.info("SpaCy model cache cleared")
+
+def get_model_status():
+    """Get the status of loaded SpaCy models."""
+    global _MODEL_CACHE
+    status = {}
+    for lang, model in _MODEL_CACHE.items():
+        if hasattr(model, 'vocab') and len(model.vocab) > 1000:
+            status[lang] = "full_model"
+        else:
+            status[lang] = "blank_model"
+    return status
+
+def ensure_models_available():
+    """
+    Ensure that all required SpaCy models are available.
+    Downloads missing models and provides status information.
+    """
+    import subprocess
+    import sys
+    
+    models_to_check = list(LANG_MODELS.values())
+    missing_models = []
+    available_models = []
+    
+    for model in models_to_check:
+        try:
+            # Try to load the model
+            spacy.load(model)
+            available_models.append(model)
+            logger.info(f"Model {model} is available")
+        except OSError:
+            missing_models.append(model)
+            logger.warning(f"Model {model} is missing")
+    
+    # Download missing models
+    for model in missing_models:
+        try:
+            logger.info(f"Downloading missing model: {model}")
+            subprocess.check_call([sys.executable, "-m", "spacy", "download", model])
+            logger.info(f"Successfully downloaded {model}")
+            available_models.append(model)
+        except subprocess.SubprocessError as e:
+            logger.error(f"Failed to download {model}: {e}")
+    
+    return {
+        "available": available_models,
+        "missing": missing_models,
+        "total_required": len(models_to_check),
+        "total_available": len(available_models)
+    }
+
+def get_recommended_model_size(language: str, use_case: str = "general") -> str:
+    """
+    Get recommended model size based on language and use case.
+    
+    Args:
+        language: Language code
+        use_case: Use case ("general", "production", "research")
+        
+    Returns:
+        Recommended model name
+    """
+    # Based on https://spacy.io/models recommendations
+    recommendations = {
+        "general": {
+            "en": "en_core_web_sm",      # Fast, efficient for most use cases
+            "es": "es_core_web_sm",      # Good balance of speed and accuracy
+            "ca": "ca_core_web_sm"       # Catalan web model
+        },
+        "production": {
+            "en": "en_core_web_md",      # Better accuracy for production
+            "es": "es_core_web_md",      # Improved accuracy for Spanish
+            "ca": "ca_core_web_md"       # Better Catalan accuracy
+        },
+        "research": {
+            "en": "en_core_web_lg",      # Best accuracy for research
+            "es": "es_core_web_lg",      # Highest Spanish accuracy
+            "ca": "ca_core_web_lg"       # Best Catalan accuracy
+        }
+    }
+    
+    return recommendations.get(use_case, recommendations["general"]).get(language, f"{language}_core_web_sm")
 
 def detect_language(text: str, specified_lang: Optional[str] = None) -> str:
     """
@@ -759,12 +887,27 @@ def build_word_cooccurrence_network(text: str, language: str, window_size: int =
         
         # Build co-occurrence network with textacy
         try:
-            graph = build_cooccurrence_network(
-                doc,
-                window_size=window_size,
-                edge_weighting="count",
-                term_filter=term_filter
-            )
+            # Check textacy version and use appropriate parameters
+            textacy_version = textacy.__version__
+            logger.info(f"Using textacy version: {textacy_version}")
+            
+            # Try different parameter combinations based on version compatibility
+            try:
+                # First try with term_filter (newer versions)
+                graph = build_cooccurrence_network(
+                    doc,
+                    window_size=window_size,
+                    edge_weighting="count",
+                    term_filter=term_filter
+                )
+            except TypeError:
+                # If term_filter fails, try without it (older versions)
+                logger.info("term_filter not supported, trying without it")
+                graph = build_cooccurrence_network(
+                    doc,
+                    window_size=window_size,
+                    edge_weighting="count"
+                )
             
             # If graph is empty, fall back to the simple approach
             if len(graph.nodes()) == 0:
@@ -783,7 +926,8 @@ def build_word_cooccurrence_network(text: str, language: str, window_size: int =
         # Try the simple approach as a last resort
         try:
             return _build_simple_cooccurrence_network(text, window_size, min_freq)
-        except Exception:
+        except Exception as fallback_error:
+            logger.error(f"Fallback approach also failed: {fallback_error}")
             # If everything fails, return an empty graph
             return nx.Graph()
 
@@ -1041,4 +1185,237 @@ def get_network_stats(graph: nx.Graph) -> Dict[str, Any]:
             "node_count": len(graph.nodes()),
             "edge_count": len(graph.edges()),
             "error": str(e)
-        } 
+        }
+
+async def analyze_word_linguistics(word: str, language: str, client=None) -> Dict[str, Any]:
+    """
+    Analyze a word's linguistic properties using LLM for rich language learning information.
+    
+    Args:
+        word: The word to analyze
+        language: Code (en, es, ca)
+        client: Optional LLM client for enhanced analysis
+        
+    Returns:
+        Dictionary with comprehensive linguistic information
+    """
+    try:
+        # Load spaCy model for basic analysis
+        nlp = load_spacy_model(language)
+        doc = nlp(word)
+        
+        if len(doc) == 0:
+            return {"error": "Could not process word"}
+        
+        token = doc[0]
+        
+        # Check if we're using a blank model (limited linguistic knowledge)
+        is_blank_model = not hasattr(nlp, 'vocab') or len(nlp.vocab) < 1000
+        
+        # Basic linguistic analysis from spaCy
+        analysis = {
+            "word": word,
+            "language": language,
+            "pos": token.pos_,
+            "lemma": token.lemma_,
+            "tag": token.tag_,
+            "dep": token.dep_,
+            "is_alpha": token.is_alpha,
+            "is_stop": token.is_stop,
+            "is_punct": token.is_punct,
+            "is_space": token.is_space,
+            "shape": token.shape_,
+            "is_title": token.is_title,
+            "is_lower": token.is_lower,
+            "is_upper": token.is_upper,
+            "is_digit": token.is_digit,
+            "like_num": token.like_num,
+            "like_url": token.like_url,
+            "like_email": token.like_email,
+            "is_entity": bool(token.ent_type_),
+            "entity_type": token.ent_type_ if token.ent_type_ else None,
+            "has_vector": token.has_vector,
+            "vector_norm": float(token.vector_norm) if token.has_vector else None,
+            "is_oov": token.is_oov,
+            "is_sent_start": token.is_sent_start,
+            "is_sent_end": token.is_sent_end,
+            "is_quote": token.is_quote,
+            "is_bracket": token.is_bracket,
+            "is_currency": token.is_currency,
+            "is_left_punct": token.is_left_punct,
+            "is_right_punct": token.is_right_punct,
+        }
+        
+        # If using a blank model, try to improve POS detection with basic rules
+        if is_blank_model:
+            improved_pos = _improve_pos_detection(word, language)
+            if improved_pos:
+                analysis["pos"] = improved_pos
+                analysis["pos_confidence"] = "low (using basic rules)"
+                logger.info(f"Improved POS detection for '{word}' from blank model: {improved_pos}")
+        
+        # Enhanced analysis using LLM if available
+        if client:
+            try:
+                enhanced_info = await _get_llm_word_analysis(word, language, analysis["pos"], client)
+                analysis.update(enhanced_info)
+            except Exception as e:
+                logger.warning(f"LLM analysis failed for {word}: {e}")
+                # Fall back to basic analysis
+                pass
+        
+        return analysis
+        
+    except Exception as e:
+        logger.error(f"Error analyzing word {word}: {str(e)}")
+        return {"error": f"Analysis failed: {str(e)}"}
+
+def _improve_pos_detection(word: str, language: str) -> Optional[str]:
+    """
+    Improve part-of-speech detection for blank SpaCy models using basic linguistic rules.
+    
+    Args:
+        word: The word to analyze
+        language: Language code
+        
+    Returns:
+        Improved POS tag or None if no improvement possible
+    """
+    word_lower = word.lower()
+    
+    if language == "es":  # Spanish
+        # Spanish verb endings
+        if word_lower.endswith(("ar", "er", "ir")):
+            return "VERB"  # Infinitive
+        elif word_lower.endswith(("o", "as", "a", "amos", "áis", "an", "es", "e", "emos", "éis", "en", "is", "es", "e", "imos", "ís", "en")):
+            return "VERB"  # Conjugated forms
+        
+        # Spanish noun endings
+        elif word_lower.endswith(("o", "e", "r", "l", "n")):
+            return "NOUN"  # Likely masculine
+        elif word_lower.endswith(("a", "ión", "dad", "tad", "tud", "ez", "eza")):
+            return "NOUN"  # Likely feminine
+        
+        # Spanish adjective endings
+        elif word_lower.endswith(("o", "a", "os", "as")):
+            return "ADJ"
+        
+        # Spanish adverb endings
+        elif word_lower.endswith(("mente")):
+            return "ADV"
+    
+    elif language == "ca":  # Catalan
+        # Catalan verb endings
+        if word_lower.endswith(("ar", "er", "re")):
+            return "VERB"  # Infinitive
+        elif word_lower.endswith(("o", "es", "a", "em", "eu", "en")):
+            return "VERB"  # Conjugated forms
+        
+        # Catalan noun endings
+        elif word_lower.endswith(("o", "e", "r", "l", "n")):
+            return "NOUN"  # Likely masculine
+        elif word_lower.endswith(("a", "ció", "tat", "tut", "esa")):
+            return "NOUN"  # Likely feminine
+        
+        # Catalan adjective endings
+        elif word_lower.endswith(("o", "a", "os", "es")):
+            return "ADJ"
+    
+    elif language == "en":  # English
+        # English verb endings
+        if word_lower.endswith(("ing", "ed", "s")):
+            return "VERB"
+        
+        # English noun endings
+        elif word_lower.endswith(("tion", "sion", "ness", "ment", "ity", "ance", "ence")):
+            return "NOUN"
+        
+        # English adjective endings
+        elif word_lower.endswith(("al", "ful", "ous", "ive", "able", "ible")):
+            return "ADJ"
+        
+        # English adverb endings
+        elif word_lower.endswith(("ly")):
+            return "ADV"
+    
+    return None
+
+async def _get_llm_word_analysis(word: str, language: str, pos: str, client) -> Dict[str, Any]:
+    """
+    Get enhanced linguistic analysis using LLM for language learning insights.
+    
+    Args:
+        word: Word to analyze
+        language: Language code
+        pos: Part of speech
+        client: LLM client
+        
+    Returns:
+        Dictionary with enhanced analysis
+    """
+    # Language names for prompts
+    lang_names = {"en": "English", "es": "Spanish", "ca": "Catalan"}
+    lang_name = lang_names.get(language, language)
+    
+    # Create a comprehensive prompt that lets the LLM do the heavy lifting
+    prompt = f"""
+        You are a {lang_name} language expert and linguistics professor. Analyze the word "{word}" 
+        (part of speech: {pos}) and provide comprehensive linguistic information for language learners.
+        
+        Focus on practical language learning insights and provide:
+        
+        **For VERBS:**
+        - Infinitive/base form
+        - Verb type (regular/irregular, conjugation pattern)
+        - Key conjugations (present, past, future)
+        - Related forms (participles, gerunds)
+        - Synonyms and related verbs
+        - Usage examples (2-3 simple sentences)
+        - Grammar rules and exceptions
+        
+        **For NOUNS:**
+        - Gender and number forms
+        - Article usage
+        - Related forms (diminutives, augmentatives)
+        - Synonyms and related nouns
+        - Usage examples
+        - Cultural notes if relevant
+        
+        **For ADJECTIVES:**
+        - Gender and number agreement
+        - Comparison forms
+        - Synonyms and antonyms
+        - Usage examples
+        - Position rules
+        
+        **For other parts of speech:**
+        - Definition and usage
+        - Related words
+        - Examples
+        - Grammar notes
+        
+        Format your response as clean, structured JSON. Focus on being educational and helpful for language learners.
+        """
+    
+    system_prompt = f"You are a {lang_name} language expert and linguistics professor. Provide accurate, educational information in clean JSON format. Focus on practical language learning insights."
+    
+    try:
+        response = await client.generate_text(prompt, system_prompt=system_prompt)
+        
+        # Try to extract JSON from response
+        import json
+        import re
+        
+        # Find JSON in the response
+        json_match = re.search(r'\{.*\}', response, re.DOTALL)
+        if json_match:
+            json_str = json_match.group(0)
+            enhanced_data = json.loads(json_str)
+            return enhanced_data
+        else:
+            logger.warning(f"Could not extract JSON from LLM response for {word}")
+            return {"llm_analysis": response}
+            
+    except Exception as e:
+        logger.error(f"LLM analysis failed for {word}: {e}")
+        return {"llm_error": str(e)} 
