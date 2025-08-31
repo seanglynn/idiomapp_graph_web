@@ -20,7 +20,7 @@ from gtts import gTTS
 import base64
 
 # Internal imports
-from idiomapp.utils.llm_utils import LLMClient, get_available_models, is_ollama_running
+from idiomapp.utils.llm_utils import LLMClient, get_available_models, get_openai_available_models
 from idiomapp.utils.logging_utils import get_logger, get_recent_logs, clear_logs
 from idiomapp.config import settings
 from idiomapp.utils.nlp_utils import (
@@ -335,6 +335,14 @@ def display_model_status(client):
     Returns:
         bool: True if the model is available, False otherwise.
     """
+    # Display status once per session
+    if "model_status_displayed_once" in st.session_state:
+        # Return cached result without displaying again
+        return st.session_state.get("last_model_available", False)
+    
+    # Mark that we've displayed the status
+    st.session_state["model_status_displayed_once"] = True
+    
     # Get status information from the client
     status = client.get_model_status()
     provider = status.get("provider", "unknown")
@@ -347,6 +355,7 @@ def display_model_status(client):
     # Display status message based on availability
     if is_available:
         status_container.success(f"✅ {provider.title()} model '{model_name}' is available")
+        st.session_state["last_model_available"] = True
         return True
     else:
         # Different message based on provider
@@ -363,8 +372,23 @@ def display_model_status(client):
             )
         else:
             status_container.error(f"⚠️ LLM provider '{provider}' is not available.")
-            
+        
+        st.session_state["last_model_available"] = False
         return False
+
+def display_translation_error(error_message: str, target_lang: str):
+    """
+    Display translation errors in a consistent, user-friendly way.
+    
+    Args:
+        error_message: The error message to display
+        target_lang: Target language code for context
+    """
+    lang_info = LANGUAGE_MAP.get(target_lang, {})
+    lang_name = lang_info.get('name', target_lang)
+    flag = lang_info.get('flag', '🌐')
+    
+    st.error(f"{lang_name} {flag}: {error_message}")
 
 async def translate_text(client, source_text, source_lang, target_lang):
     """
@@ -1860,6 +1884,51 @@ def display_nlp_legend():
         - Dashed edges indicate cross-language or cross-sentence connections
         """)
 
+def handle_translation_error(error_message: str, source_lang: str, target_lang: str) -> str:
+    """
+    Handle translation errors gracefully and return user-friendly error messages.
+    
+    Args:
+        error_message: The raw error message from the LLM client
+        source_lang: Source language code
+        target_lang: Target language code
+        
+    Returns:
+        str: User-friendly error message
+    """
+    # Extract error details if it's an OpenAI API error
+    if "Error code:" in error_message:
+        try:
+            # Parse the error structure
+            if "model_not_found" in error_message:
+                return f"⚠️ Model not available. Please select a different model from the sidebar."
+            elif "invalid_api_key" in error_message:
+                return f"⚠️ Invalid API key. Please check your OpenAI API key in the sidebar."
+            elif "insufficient_quota" in error_message:
+                return f"⚠️ API quota exceeded. Please check your OpenAI billing and usage limits."
+            elif "quota_exceeded" in error_message:
+                return f"⚠️ API quota exceeded. Please check your OpenAI billing and usage limits."
+            elif "rate_limit" in error_message:
+                return f"⚠️ Rate limit exceeded. Please wait a moment and try again."
+            elif "429" in error_message:
+                return f"⚠️ Rate limit exceeded. Please wait a moment and try again."
+            elif "401" in error_message:
+                return f"⚠️ Authentication failed. Please check your OpenAI API key."
+            elif "403" in error_message:
+                return f"⚠️ Access denied. Please check your OpenAI account permissions."
+            elif "404" in error_message:
+                return f"⚠️ Model not found. Please select a different model from the sidebar."
+            else:
+                return f"⚠️ API error occurred. Please try again or check your OpenAI account."
+        except:
+            return f"⚠️ Translation service error. Please try again."
+    
+    # Handle other types of errors
+    if "Error:" in error_message:
+        return f"⚠️ Translation service error. Please try again."
+    
+    return f"⚠️ Unable to translate to {LANGUAGE_MAP.get(target_lang, {}).get('name', target_lang)}. Please try again."
+
 def main():
     # Initialize session state for help page if not exists
     if "show_help_page" not in st.session_state:
@@ -1876,39 +1945,66 @@ def main():
     Translate text between languages and visualize word relationships in an interactive graph.
     """)
     
-    # Get LLM provider and model from settings
-    llm_provider = settings.llm_provider.value
-    model_name = settings.current_model
-    
-    # Use the factory method to create the appropriate client
-    client = LLMClient.create(provider=llm_provider, model_name=model_name)
-    
-    # Display model status and check if it's available
-    model_available = display_model_status(client)
-    
-    # Initialize session state
+    # Initialize session state FIRST
+    if "llm_provider" not in st.session_state:
+        st.session_state["llm_provider"] = settings.llm_provider.value
+    if "model_name" not in st.session_state:
+        st.session_state["model_name"] = settings.current_model
     if "translations" not in st.session_state:
         st.session_state["translations"] = {}
     if "graph_data" not in st.session_state:
         st.session_state["graph_data"] = None
     if "cooccurrence_graphs" not in st.session_state:
         st.session_state["cooccurrence_graphs"] = {}
-    if "llm_provider" not in st.session_state:
-        st.session_state["llm_provider"] = llm_provider
-    if "model_name" not in st.session_state:
-        st.session_state["model_name"] = model_name
     if "chat_history" not in st.session_state:
         st.session_state["chat_history"] = []
     if "show_debug" not in st.session_state:
         st.session_state["show_debug"] = False
     if "audio_cache" not in st.session_state:
         st.session_state["audio_cache"] = {}
-    if "model_available" not in st.session_state:
-        st.session_state["model_available"] = model_available
     if "current_view" not in st.session_state:
         st.session_state["current_view"] = "semantic"
-    else:
-        st.session_state["model_available"] = model_available
+    
+    # Now get LLM provider and model from properly initialized session state
+    llm_provider = st.session_state["llm_provider"]
+    model_name = st.session_state["model_name"]
+    
+    # Use cached LLM client to prevent repeated initialization, but recreate if provider/model changes
+    client_needs_update = (
+        "llm_client" not in st.session_state or 
+        st.session_state.get("llm_provider") != llm_provider or
+        st.session_state.get("model_name") != model_name or
+        st.session_state.get("needs_client_reinit", False)  # Check for API key update flag
+    )
+    
+    if client_needs_update:
+        # Get API key from session state if using OpenAI
+        api_key = None
+        if llm_provider == "openai" and "openai_api_key" in st.session_state:
+            api_key = st.session_state["openai_api_key"]
+        
+        st.session_state["llm_client"] = LLMClient.create(
+            provider=llm_provider, 
+            model_name=model_name, 
+            api_key=api_key
+        )
+        # Clear model status cache to force recheck
+        if "model_status_displayed_once" in st.session_state:
+            del st.session_state["model_status_displayed_once"]
+        if "last_model_available" in st.session_state:
+            del st.session_state["last_model_available"]
+        # Clear the reinit flag after successful client creation
+        if "needs_client_reinit" in st.session_state:
+            del st.session_state["needs_client_reinit"]
+        logger.info(f"Created new LLM client for {llm_provider}:{model_name}")
+    
+    client = st.session_state["llm_client"]
+    
+    # Display model status and check if it's available (with caching)
+    model_available = display_model_status(client)
+    
+    # Update model availability in session state
+    st.session_state["model_available"] = model_available
     
     # Add a sidebar with translation settings
     with st.sidebar:
@@ -1958,7 +2054,10 @@ def main():
         
         # Show provider-specific options
         if selected_provider == "ollama":
-            available_models = get_available_models() if st.session_state["llm_provider"] == "ollama" else ["llama3.2:latest"]
+            # Use cached available models to prevent repeated API calls
+            if "cached_available_models" not in st.session_state:
+                st.session_state["cached_available_models"] = get_available_models() if st.session_state["llm_provider"] == "ollama" else ["llama3.2:latest"]
+            available_models = st.session_state["cached_available_models"]
             model_name = st.selectbox(
                 f"Ollama Model {'' if st.session_state['model_available'] and st.session_state['llm_provider'] == 'ollama' else '⚠️'}",
                 available_models,
@@ -1967,7 +2066,10 @@ def main():
                 disabled=not (st.session_state["model_available"] and st.session_state["llm_provider"] == "ollama")
             )
         elif selected_provider == "openai":
-            openai_models = settings.openai_models_list
+            # Dynamically fetch available OpenAI models instead of using hardcoded list
+            openai_models = get_openai_available_models(
+                st.session_state.get("openai_api_key", settings.openai_api_key)
+            )
             model_name = st.selectbox(
                 f"OpenAI Model {'' if st.session_state['model_available'] and st.session_state['llm_provider'] == 'openai' else '⚠️'}",
                 openai_models,
@@ -1984,16 +2086,26 @@ def main():
                 help="Enter your OpenAI API key to use ChatGPT"
             )
             
-            # Update session state and environment if API key changes
+            # Update session state if API key changes
             if openai_api_key != settings.openai_api_key:
-                # Update the global config settings temporarily 
-                # Note: This is a runtime update, the config object itself doesn't persist changes
-                os.environ["OPENAI_API_KEY"] = openai_api_key
+                # Store the API key securely in session state only - NOT in environment variables
                 if openai_api_key:
                     st.success("API key updated. Reinitializing client...")
+                    # Store API key in session state for secure access
+                    st.session_state["openai_api_key"] = openai_api_key
                     # Force reinitialization of client with new API key
                     st.session_state["model_available"] = False
-                    st.rerun()
+                    # Set a flag to trigger reinitialization on next interaction
+                    st.session_state["needs_client_reinit"] = True
+                    # Clear the cached client to force reinitialization
+                    st.session_state["llm_client"] = None
+                    st.session_state["cached_model_status"] = None
+                    st.session_state["cached_available_models"] = None
+                else:
+                    # Clear the API key from session state if it's empty
+                    if "openai_api_key" in st.session_state:
+                        del st.session_state["openai_api_key"]
+                    st.warning("API key cleared. Please enter a valid API key to use OpenAI.")
         
         # Update client if provider or model changes
         if selected_provider != st.session_state["llm_provider"] or model_name != st.session_state["model_name"]:
@@ -2034,23 +2146,12 @@ def main():
             st.warning("Please select at least one target language")
             target_langs = settings.default_target_languages_list[:1]  # Use first default target language
         
-        # Model selection with status indication
-            available_models = get_available_models()
-            model_name = st.selectbox(
-            f"Translation Model {'' if st.session_state['model_available'] else '⚠️'}",
-                available_models,
-                index=available_models.index(st.session_state["model_name"]) if st.session_state["model_name"] in available_models else 0,
-            help="Select the AI model to use for translation",
-            disabled=not st.session_state["model_available"]
-        )
-        
+        # Model availability status
         if not st.session_state["model_available"]:
             st.error("⚠️ Selected model is not available. AI features are disabled.")
             st.info("Check the model status above and make sure it's properly installed.")
         else:
             st.success("✅ AI model is ready to use")
-            
-            st.session_state["model_name"] = model_name
             
         # Switch for visualization type
         st.header("Visualization Settings")
@@ -2454,31 +2555,42 @@ def main():
                 cooccurrence_graphs = {}
                 
                 # Process each target language
+                successful_translations = {}
+                translation_errors = {}
+                
                 for target_lang in target_langs:
                     # Get the translation for this language
                     translation = loop.run_until_complete(
                         translate_text(client, source_text, source_lang, target_lang)
                     )
                     
-                    # Store the translation
-                    all_translations[target_lang] = translation
+                    # Check if translation was successful or if it's an error
+                    if translation.startswith("Error:") or "Error code:" in translation:
+                        # This is an error - handle it separately
+                        error_message = handle_translation_error(translation, source_lang, target_lang)
+                        translation_errors[target_lang] = error_message
+                        logger.warning(f"Translation failed for {target_lang}: {translation}")
+                        continue
+                    
+                    # Store successful translation
+                    successful_translations[target_lang] = translation
                     
                     # Verify if Spanish and Catalan translations might be swapped
-                    if "es" in all_translations and "ca" in all_translations and len(all_translations) >= 2:
+                    if "es" in successful_translations and "ca" in successful_translations and len(successful_translations) >= 2:
                         # Check for Spanish markers in Catalan translation
                         spanish_markers = ["es", "está", "estás", "la", "el", "los", "las", "y", "eres", "tienes"]
                         catalan_markers = ["és", "està", "estàs", "la", "el", "els", "les", "i", "ets", "tens"]
                         
                         # Count occurrences of Spanish vs Catalan markers
-                        spanish_count_in_es = sum(1 for marker in spanish_markers if f" {marker} " in f" {all_translations['es']} ")
-                        catalan_count_in_es = sum(1 for marker in catalan_markers if f" {marker} " in f" {all_translations['es']} ")
-                        spanish_count_in_ca = sum(1 for marker in spanish_markers if f" {marker} " in f" {all_translations['ca']} ")
-                        catalan_count_in_ca = sum(1 for marker in catalan_markers if f" {marker} " in f" {all_translations['ca']} ")
+                        spanish_count_in_es = sum(1 for marker in spanish_markers if f" {marker} " in f" {successful_translations['es']} ")
+                        catalan_count_in_es = sum(1 for marker in catalan_markers if f" {marker} " in f" {successful_translations['es']} ")
+                        spanish_count_in_ca = sum(1 for marker in spanish_markers if f" {marker} " in f" {successful_translations['ca']} ")
+                        catalan_count_in_ca = sum(1 for marker in catalan_markers if f" {marker} " in f" {successful_translations['ca']} ")
                         
                         # If Spanish translation looks more like Catalan and vice versa, swap them
                         if catalan_count_in_es > spanish_count_in_es and spanish_count_in_ca > catalan_count_in_ca:
                             logger.warning("Detected possible language mismatch. Swapping Spanish and Catalan translations.")
-                            all_translations["es"], all_translations["ca"] = all_translations["ca"], all_translations["es"]
+                            successful_translations["es"], successful_translations["ca"] = successful_translations["ca"], successful_translations["es"]
                     
                     # Add each translation as a separate message
                     translation_content = f"{LANGUAGE_MAP[target_lang]['name']} {LANGUAGE_MAP[target_lang]['flag']}: {translation.strip()}"
@@ -2537,11 +2649,22 @@ def main():
                     else:
                         logger.warning(f"Empty co-occurrence network for {target_lang}")
                 
-                # Store all translations in session state
+                # Display any translation errors separately
+                if translation_errors:
+                    st.error("⚠️ Some translations failed:")
+                    for target_lang, error_msg in translation_errors.items():
+                        display_translation_error(error_msg, target_lang)
+                
+                # Only proceed with successful translations
+                if not successful_translations:
+                    st.error("❌ All translations failed. Please check your API key and model selection.")
+                    return
+                
+                # Store successful translations in session state
                 st.session_state["translations"][source_text] = {
                     "source_lang": source_lang,
-                    "target_langs": target_langs,
-                    "translations": all_translations
+                    "target_langs": list(successful_translations.keys()),
+                    "translations": successful_translations
                 }
                 
                 # Store all graph data

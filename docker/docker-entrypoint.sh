@@ -15,6 +15,7 @@ echo "- Streamlit server will be available at: http://localhost:${STREAMLIT_SERV
 echo "- Server address binding: ${STREAMLIT_SERVER_ADDRESS:-0.0.0.0}"
 echo "- Log level: ${LOG_LEVEL:-INFO}"
 echo "- LLM Provider: ${LLM_PROVIDER:-ollama}"
+echo "- Package Manager: uv"
 
 # Provider-specific information
 if [ "${LLM_PROVIDER:-ollama}" = "ollama" ]; then

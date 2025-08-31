@@ -1,8 +1,6 @@
 # IdiomApp
 Visualizing linguistic connections through interactive graphs and networks.
 
-![](docs/assets/aprend-er-re.png)
-
 **¿Qué es esto?** 
 - Establecer relaciones entre palabras y frases en varios idiomas.
 
@@ -16,7 +14,12 @@ Visualizing linguistic connections through interactive graphs and networks.
 ## Project Structure
 
 - `idiomapp/streamlit/`: Main Streamlit application
-- `idiomapp/utils/`: Utility modules for LLM integration, NLP, TTS and logging
+- `idiomapp/utils/`: Utility modules for LLM integration, NLP, TTS, state management, and logging
+  - `state_utils.py`: Centralized state management with caching and session state utilities
+  - `llm_utils.py`: LLM client abstractions for Ollama and OpenAI
+  - `nlp_utils.py`: NLP processing and graph generation utilities
+  - `audio_utils.py`: Text-to-speech and audio processing
+  - `logging_utils.py`: Centralized logging configuration
 - `archive/`: Archived code (previous FastAPI application)
 
 ## Quick Start

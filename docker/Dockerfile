@@ -7,17 +7,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Poetry
-RUN pip install poetry==1.7.1
+# Install uv
+RUN pip install uv
 
-# Copy poetry configuration files
-COPY pyproject.toml poetry.lock ./
+# Copy uv configuration files and README
+COPY pyproject.toml uv.lock ./
+COPY README.md ./
 
-# Configure poetry to not create a virtual environment
-RUN poetry config virtualenvs.create false
-
-# Install dependencies
-RUN poetry install --no-dev
+# Install dependencies using uv and ensure streamlit is available
+RUN uv pip install --system -e . && \
+    uv pip install --system streamlit
 
 # Create directory for Streamlit configuration
 RUN mkdir -p /root/.streamlit
@@ -47,6 +46,7 @@ ARG STREAMLIT_SERVER_ADDRESS=0.0.0.0
 
 # Set environment variables from build arguments
 ENV PYTHONPATH=/app
+ENV PATH="/usr/local/bin:$PATH"
 ENV STREAMLIT_SERVER_PORT=${PORT}
 ENV LOG_LEVEL=${LOG_LEVEL}
 ENV LLM_PROVIDER=${LLM_PROVIDER}
