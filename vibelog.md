@@ -1,5 +1,56 @@
 # VibeLog - IdiomApp Development Progress
 
+## 2025-08-31 - Catalan Translation and Audio Fixes ✅
+
+### **SpaCy Model Loading Issues**
+- **Fixed Language Model Errors**: Resolved "Can't find model" errors for Catalan and other languages
+- **Textacy Integration Fix**: Updated `textacy.make_spacy_doc()` to use loaded SpaCy models instead of language codes
+- **Proper Model Handling**: The issue was that textacy expected SpaCy language objects, not language code strings
+
+### **Audio Generation Fixes**
+- **Catalan TTS Working**: Fixed "No text to speak" errors for Catalan audio generation
+- **Debug Logging Added**: Enhanced logging in `extract_translation_content()` to track text extraction
+- **Text Processing**: Improved text extraction from multi-language translation messages
+
+### **Technical Details**
+- **Root Cause**: `textacy.make_spacy_doc(text, lang=language)` was called with short language codes instead of loaded SpaCy models
+- **Solution**: Changed to `textacy.make_spacy_doc(text, lang=nlp)` where `nlp` is the loaded SpaCy model
+- **Impact**: This resolves both SpaCy model errors and audio generation issues for all languages
+
+## 2025-08-31 - Ollama Function Consolidation & Code Organization ✅
+
+### **Function Consolidation**
+- **Moved Ollama Functions**: Consolidated all Ollama-specific functions into `idiomapp/utils/ollama_utils.py`
+- **Eliminated Duplicates**: Removed duplicate function definitions between `llm_utils.py` and `ollama_utils.py`
+- **Cleaner Separation**: Clear separation between LLM client logic and Ollama-specific utilities
+- **Updated Imports**: All references now point to the correct module locations
+
+### **Functions Moved**
+- **`is_ollama_running()`**: Ollama service availability checking
+- **`get_valid_ollama_host()`**: Host validation and fallback logic
+- **`get_available_models()`**: Model listing functionality
+- **`pull_model_if_needed()`**: Model download management
+
+### **Benefits**
+- **Single Source of Truth**: All Ollama functions in one dedicated module
+- **Eliminated Circular Imports**: Cleaner dependency structure
+- **Better Maintainability**: Easier to find and update Ollama-specific code
+- **Reduced Code Duplication**: No more duplicate function definitions
+
+## 2025-08-31 - Major Architecture Improvement: Configuration-Driven Model Management ✅
+
+### **Model Parameter Compatibility**
+- **Fixed max_tokens vs max_completion_tokens**: Resolved compatibility issue between different OpenAI model generations
+- **Automatic Parameter Detection**: GPT-4o and Claude-3 models now automatically use `max_completion_tokens`
+- **Legacy Model Support**: Older models continue to use `max_tokens` parameter
+- **Fallback Mechanism**: Added automatic fallback if initial parameter fails
+- **Enhanced Logging**: Better debugging information for parameter selection
+
+### **Technical Implementation**
+- **Smart Parameter Selection**: Model name-based parameter detection in `OpenAIClient.generate_text()`
+- **Error Handling**: Graceful fallback from `max_tokens` to `max_completion_tokens` on parameter errors
+- **Backward Compatibility**: All existing functionality preserved while adding new model support
+
 ## 2025-08-31 - Major Security & Error Handling Overhaul ✅
 
 ### **Security Fixes Implemented**

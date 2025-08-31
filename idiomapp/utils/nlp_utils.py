@@ -7,7 +7,7 @@ import os
 import re
 import logging
 import tempfile
-from typing import List, Dict, Any, Optional, Union, Tuple
+from typing import List, Dict, Any, Optional
 
 # NLP libraries
 import spacy
@@ -85,7 +85,7 @@ def load_spacy_model(language: str) -> spacy.language.Language:
         logger.info(f"Successfully loaded language model: {model_name}")
         _MODEL_CACHE[language] = nlp
         return nlp
-    except OSError as e:
+    except OSError:
         # If model is not found, download it
         logger.info(f"Model {model_name} not found locally. Attempting to download...")
         try:
@@ -720,7 +720,7 @@ def build_word_cooccurrence_network(text: str, language: str, window_size: int =
         
         # Create a textacy Doc
         try:
-            doc = textacy.make_spacy_doc(text, lang=language)
+            doc = textacy.make_spacy_doc(text, lang=nlp)
         except ValueError as e:
             logger.warning(f"Error creating textacy Doc: {e}. Using simplified approach.")
             return _build_simple_cooccurrence_network(text, window_size, min_freq)
