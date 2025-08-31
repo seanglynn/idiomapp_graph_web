@@ -32,14 +32,14 @@ class LLMClient(ABC):
         pass
     
     @classmethod
-    def create(cls, provider: str = None, model_name: str = None) -> 'LLMClient':
+    def create(cls, provider: str = None, model_name: str = None, api_key: str = None) -> 'LLMClient':
         """Factory method to create the appropriate LLM client"""
         provider = provider or settings.llm_provider.value
         
         if provider == LLMProvider.OLLAMA.value:
             return OllamaClient(model_name or settings.default_model)
         elif provider == LLMProvider.OPENAI.value:
-            return OpenAIClient(model_name or settings.openai_model)
+            return OpenAIClient(model_name or settings.openai_model, api_key)
         else:
             logger.error(f"Unknown LLM provider: {provider}, falling back to Ollama")
             return OllamaClient(model_name or settings.default_model)
@@ -187,15 +187,16 @@ class OllamaClient(LLMClient):
 class OpenAIClient(LLMClient):
     """Client for interacting with OpenAI models."""
     
-    def __init__(self, model_name=None):
+    def __init__(self, model_name=None, api_key: str = None):
         """
         Initialize the OpenAI client.
         
         Args:
             model_name: The name of the model to use. If None, uses the OPENAI_MODEL
-                        from environment variables.
+                        from settings.
+            api_key: OpenAI API key. If None, uses the one from settings.
         """
-        self.api_key = settings.openai_api_key
+        self.api_key = api_key or settings.openai_api_key
         self.model_name = model_name or settings.openai_model
         
         # Set client configuration
@@ -273,6 +274,48 @@ class OpenAIClient(LLMClient):
             raise e
 
 # Helper functions from the original ollama_utils.py
+def get_openai_available_models(api_key: str = None) -> list:
+    """
+    Get a list of available OpenAI models from their API.
+    
+    Args:
+        api_key: OpenAI API key. If None, tries to get from settings.
+        
+    Returns:
+        list: List of available model names
+    """
+    if not api_key:
+        api_key = settings.openai_api_key
+    
+    if not api_key:
+        logger.warning("No OpenAI API key provided, cannot fetch available models")
+        return ["gpt-3.5-turbo"]  # Fallback to a common model
+    
+    try:
+        from openai import OpenAI
+        
+        client = OpenAI(api_key=api_key)
+        response = client.models.list()
+        
+        # Extract model IDs and filter for chat models
+        available_models = []
+        for model in response.data:
+            model_id = model.id
+            # Filter for common chat models (you can adjust this filtering)
+            if any(prefix in model_id for prefix in ["gpt-", "claude-", "gemini-"]):
+                available_models.append(model_id)
+        
+        # Sort models by name for better UX
+        available_models.sort()
+        
+        logger.info(f"Successfully fetched {len(available_models)} available OpenAI models")
+        return available_models
+        
+    except Exception as e:
+        logger.error(f"Error fetching OpenAI models: {str(e)}")
+        # Return fallback models if API call fails
+        return ["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo"]
+
 def is_ollama_running():
     """
     Check if Ollama is running and accessible through any of the potential hosts.
