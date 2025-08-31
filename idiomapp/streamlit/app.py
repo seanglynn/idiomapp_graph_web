@@ -14,6 +14,7 @@ from streamlit.logger import get_logger
 from idiomapp.utils.llm_utils import LLMClient, get_openai_available_models
 from idiomapp.utils.ollama_utils import get_available_models
 from idiomapp.utils.logging_utils import get_logger, get_recent_logs, clear_logs
+from idiomapp.utils.graph_storage import get_graph_storage
 from idiomapp.config import (
     settings, 
     LANGUAGE_MAP, 
@@ -2648,6 +2649,10 @@ def main():
     if "current_word_lang" not in st.session_state:
         st.session_state["current_word_lang"] = None
     
+    # Initialize graph storage
+    if "graph_storage" not in st.session_state:
+        st.session_state.graph_storage = get_graph_storage()
+    
     # Handle word analysis requests from graph clicks
     if "word_analysis_request" in st.query_params:
         try:
@@ -2939,6 +2944,83 @@ def main():
                 value=st.session_state["show_debug"],
             help="Show detailed logs of translation processing"
             )
+        
+        # Graph History Section
+        st.header("📊 Graph History")
+        
+        # Show recent graphs
+        try:
+            history = st.session_state.graph_storage.get_graph_history(limit=10)
+            
+            if history:
+                for graph in history:
+                    # Create a compact display for each graph
+                    with st.expander(f"📈 {graph['source_text'][:40]}...", expanded=False):
+                        st.write(f"**Languages:** {', '.join(graph['target_languages'])}")
+                        st.write(f"**Nodes:** {graph['node_count']}, **Edges:** {graph['edge_count']}")
+                        st.write(f"**Created:** {graph['created_at'][:16]}")
+                        
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            if st.button("🔄 Load", key=f"load_{graph['id']}"):
+                                # Load and display historical graph
+                                loaded_graph = st.session_state.graph_storage.get_graph(graph['id'])
+                                if loaded_graph:
+                                    st.session_state["current_graph_data"] = {
+                                        "nodes": loaded_graph["nodes"],
+                                        "edges": loaded_graph["edges"]
+                                    }
+                                    st.session_state["current_graph_id"] = graph['id']
+                                    st.rerun()
+                        
+                        with col2:
+                            if st.button("🗑️ Delete", key=f"delete_{graph['id']}"):
+                                if st.session_state.graph_storage.delete_graph(graph['id']):
+                                    st.success("Graph deleted!")
+                                    st.rerun()
+            else:
+                st.info("No graphs saved yet. Generate your first graph to see it here!")
+        except Exception as e:
+            st.error(f"Error loading graph history: {e}")
+            logger.error(f"Error loading graph history: {e}")
+        
+        # Add search functionality
+        st.subheader("🔍 Search Graphs")
+        search_query = st.text_input("Search by text content", placeholder="Enter text to search...", key="graph_search")
+        
+        if search_query:
+            try:
+                search_results = st.session_state.graph_storage.search_graphs_by_text(search_query, limit=5)
+                if search_results:
+                    st.write(f"Found {len(search_results)} matching graphs:")
+                    for result in search_results:
+                        st.write(f"• {result['source_text'][:50]}...")
+                else:
+                    st.info("No matching graphs found.")
+            except Exception as e:
+                st.error(f"Error searching graphs: {e}")
+                logger.error(f"Error searching graphs: {e}")
+        
+        # Show storage statistics
+        st.subheader("📊 Storage Info")
+        try:
+            stats = st.session_state.graph_storage.get_graph_statistics()
+            st.write(f"**Total Graphs:** {stats['total_graphs']}")
+            st.write(f"**Total Nodes:** {stats['total_nodes']}")
+            st.write(f"**Storage Size:** {stats['storage_size_mb']} MB")
+        except Exception as e:
+            st.error(f"Error loading storage stats: {e}")
+            logger.error(f"Error loading storage stats: {e}")
+        
+        if st.button("🗑️ Clear All Data", key="clear_all_graphs"):
+            if st.confirm("Are you sure you want to delete all saved graphs?"):
+                try:
+                    if st.session_state.graph_storage.clear_all_data():
+                        st.success("All data cleared!")
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"Error clearing data: {e}")
+                    logger.error(f"Error clearing data: {e}")
     
     # Show debug logs if enabled
     if st.session_state["show_debug"]:
@@ -3498,6 +3580,26 @@ def main():
                 
                 # Store co-occurrence graphs
                 st.session_state["cooccurrence_graphs"] = cooccurrence_graphs
+                
+                # Store graphs in persistent storage
+                if all_graph_data and len(all_graph_data) > 0:
+                    for target_lang, graph_data in all_graph_data.items():
+                        if graph_data and len(graph_data.get("nodes", [])) > 0:
+                            try:
+                                graph_id = st.session_state.graph_storage.store_graph(
+                                    source_text=source_text,
+                                    target_languages=[target_lang],
+                                    nodes=graph_data["nodes"],
+                                    edges=graph_data["edges"],
+                                    user_session=st.session_state.get("user_id", "anonymous"),
+                                    model_used=st.session_state.get("llm_provider", "unknown"),
+                                    translation_text=successful_translations.get(target_lang, "")
+                                )
+                                logger.info(f"Stored graph {graph_id} for {target_lang}")
+                            except Exception as e:
+                                logger.error(f"Error storing graph for {target_lang}: {e}")
+                
+                st.success(f"✅ Translation complete! Generated graphs for {len(successful_translations)} languages.")
                 
             except Exception as e:
                 logger.error(f"Translation error: {str(e)}")
