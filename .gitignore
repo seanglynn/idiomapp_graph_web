@@ -7,3 +7,5 @@ ollama-models/**
 .venv
 .idea/
 .vscode/settings.json
+.prompts/*
+graph_storage/*

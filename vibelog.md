@@ -815,7 +815,225 @@ if translation_errors:
 - **Separation of Concerns**: Clear module boundaries and responsibilities
 - **Configuration-Driven**: Behavior controlled by settings rather than hardcoded values
 
-## Current Status: Production Ready ✅
+## 2025-08-31 - Graph Storage System Implementation ✅
+
+### **Functional Changes**
+- **Persistent Graph Storage**: Implemented abstract base class pattern for graph data persistence
+- **Code Cleanup**: Removed redundant language mapping code and centralized configuration usage
+- **Streamlit Integration**: Seamless integration with existing Streamlit session state
+- **Graph History Management**: Sidebar display of recent graphs with load/delete functionality
+- **Search Capabilities**: Text-based search through stored graph metadata
+- **Storage Statistics**: Real-time display of total graphs, nodes, edges, and storage size
+- **Data Management**: Clear all graphs functionality and individual graph deletion
+
+### **Technical Implementation**
+```python
+# graph_storage.py - Abstract base class and implementation
+class GraphStorage(ABC):
+    """Abstract base class for graph storage implementations"""
+    
+    @abstractmethod
+    def store_graph(self, source_text: str, target_language: str, 
+                   graph_data: Dict[str, Any], model_used: str) -> str:
+        """Store graph data and return unique identifier"""
+        pass
+    
+    @abstractmethod
+    def get_graph(self, graph_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve graph data by ID"""
+        pass
+    
+    @abstractmethod
+    def get_graph_history(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """Get recent graph history"""
+        pass
+
+class StreamlitGraphStorage(GraphStorage):
+    """Streamlit-specific graph storage implementation"""
+    
+    def __init__(self, storage_dir: str = "graph_storage"):
+        self.storage_dir = Path(storage_dir)
+        self.storage_dir.mkdir(exist_ok=True)
+        self.graphs_file = self.storage_dir / "graphs.json"
+        self.nodes_file = self.storage_dir / "nodes.pkl"
+        self.edges_file = self.storage_dir / "edges.pkl"
+        self._load_existing_data()
+    
+    def store_graph(self, source_text: str, target_language: str, 
+                   graph_data: Dict[str, Any], model_used: str) -> str:
+        """Store graph with metadata and return unique ID"""
+        graph_id = f"graph_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{len(self.graphs)}"
+        
+        # Store metadata
+        metadata = {
+            "id": graph_id,
+            "source_text": source_text,
+            "target_language": target_language,
+            "model_used": model_used,
+            "timestamp": datetime.now().isoformat(),
+            "node_count": len(graph_data.get("nodes", [])),
+            "edge_count": len(graph_data.get("edges", [])),
+            "storage_size": self._calculate_storage_size(graph_data)
+        }
+        
+        self.graphs[graph_id] = metadata
+        self._save_data()
+        
+        logger.info(f"Stored graph {graph_id} with {metadata['node_count']} nodes and {metadata['edge_count']} edges")
+        return graph_id
+```
+
+### **Storage Architecture**
+```python
+# Storage file structure
+graph_storage/
+├── graphs.json      # Graph metadata and searchable information
+├── nodes.pkl        # Serialized graph node data
+└── edges.pkl        # Serialized graph edge data
+
+# Metadata structure
+{
+    "id": "graph_20250831_212149_0",
+    "source_text": "hello, is it me you're looking for?",
+    "target_language": "es",
+    "model_used": "gpt-4o",
+    "timestamp": "2025-08-31T21:21:49.123456",
+    "node_count": 14,
+    "edge_count": 7,
+    "storage_size": "2.3 KB"
+}
+```
+
+### **Streamlit Integration**
+```python
+# app.py - Graph storage initialization
+def initialize_session_state():
+    # ... existing initialization ...
+    
+    # Initialize graph storage
+    if "graph_storage" not in st.session_state:
+        st.session_state.graph_storage = get_graph_storage()
+
+# Automatic graph storage after generation
+if all_graph_data and len(all_graph_data) > 0:
+    for target_lang, graph_data in all_graph_data.items():
+        if graph_data and len(graph_data.get("nodes", [])) > 0:
+            try:
+                graph_id = st.session_state.graph_storage.store_graph(
+                    source_text=source_text,
+                    target_language=target_lang,
+                    graph_data=graph_data,
+                    model_used=llm_client.model_name if llm_client else "unknown"
+                )
+                st.success(f"Stored graph {graph_id} for {target_lang}")
+            except Exception as e:
+                st.error(f"Failed to store graph for {target_lang}: {str(e)}")
+```
+
+### **Graph History Sidebar**
+```python
+# app.py - Graph history display
+st.header("📊 Graph History")
+
+try:
+    history = st.session_state.graph_storage.get_graph_history(limit=10)
+    
+    if history:
+        for graph in history:
+            with st.expander(f"📈 {graph['target_language'].upper()}: {graph['source_text'][:50]}..."):
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    st.write(f"**Source:** {graph['source_text']}")
+                    st.write(f"**Model:** {graph['model_used']}")
+                    st.write(f"**Nodes:** {graph['node_count']}, **Edges:** {graph['edge_count']}")
+                    st.write(f"**Size:** {graph['storage_size']}")
+                
+                with col2:
+                    if st.button("🔄 Load", key=f"load_{graph['id']}"):
+                        # Load graph data back into session state
+                        loaded_graph = st.session_state.graph_storage.get_graph(graph['id'])
+                        if loaded_graph:
+                            st.session_state["graph_data"] = {graph['target_language']: loaded_graph}
+                            st.rerun()
+                    
+                    if st.button("🗑️ Delete", key=f"delete_{graph['id']}"):
+                        st.session_state.graph_storage.delete_graph(graph['id'])
+                        st.rerun()
+    
+    # Storage statistics
+    stats = st.session_state.graph_storage.get_storage_stats()
+    st.sidebar.metric("Total Graphs", stats["total_graphs"])
+    st.sidebar.metric("Total Nodes", stats["total_nodes"])
+    st.sidebar.metric("Total Edges", stats["total_edges"])
+    st.sidebar.metric("Storage Size", stats["total_size"])
+    
+except Exception as e:
+    st.error(f"Error loading graph history: {str(e)}")
+```
+
+### **Search and Management Features**
+```python
+# graph_storage.py - Search functionality
+def search_graphs(self, query: str) -> List[Dict[str, Any]]:
+    """Search graphs by text content"""
+    query_lower = query.lower()
+    results = []
+    
+    for graph_id, metadata in self.graphs.items():
+        if (query_lower in metadata["source_text"].lower() or
+            query_lower in metadata["target_language"].lower() or
+            query_lower in metadata["model_used"].lower()):
+            results.append(metadata)
+    
+    return results
+
+def clear_all_graphs(self) -> bool:
+    """Clear all stored graphs"""
+    try:
+        self.graphs.clear()
+        self.nodes_data.clear()
+        self.edges_data.clear()
+        self._save_data()
+        logger.info("Cleared all graphs")
+        return True
+    except Exception as e:
+        logger.error(f"Error clearing graphs: {e}")
+        return False
+```
+
+### **Code Cleanup - Configuration Centralization**
+```python
+# Before: Redundant language mapping in nlp_utils.py
+lang_mapping = {
+    "en": "en",
+    "es": "es", 
+    "ca": "ca"
+}
+full_lang = lang_mapping.get(language, "en")
+
+# After: Using centralized config
+if detected in LANG_MODELS:
+    return detected
+else:
+    return "en"  # Default to English
+```
+
+**Why This Was Needed:**
+- **Eliminated Duplication**: Removed redundant language code mappings
+- **Single Source of Truth**: All language configuration now in `config.py`
+- **Consistency**: Following established pattern of centralized configuration
+- **Maintainability**: Changes to supported languages only need to happen in one place
+
+### **Benefits of Implementation**
+- **Data Persistence**: Graphs survive app restarts and session changes
+- **Performance**: Faster access to previously generated graphs
+- **User Experience**: Easy access to learning history and previous analyses
+- **Storage Efficiency**: Compressed storage with metadata indexing
+- **Extensibility**: Abstract base class allows for different storage backends
+- **Searchability**: Find specific graphs by content or language
+- **Management**: Easy cleanup and organization of stored data
+
+## Current Status: Production Ready with Graph Storage ✅
 
 The application now provides:
 - **Secure API key management**
@@ -826,6 +1044,8 @@ The application now provides:
 - **Production-grade reliability**
 - **Interactive graph analysis**
 - **Comprehensive language learning features**
+- **Persistent graph storage and management**
+- **Graph history and search capabilities**
 
 ## Next Steps (Future Enhancements)
 - **Additional Language Support**: Expand beyond EN/ES/CA

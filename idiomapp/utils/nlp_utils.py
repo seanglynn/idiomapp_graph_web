@@ -112,13 +112,9 @@ def load_spacy_model(language: str) -> spacy.language.Language:
                 return nlp
                 
         except Exception as download_error:
-            # If downloading failed, try alternative models
-            logger.error(f"Error downloading {model_name}: {str(download_error)}. Trying alternative models.")
-            nlp = _try_alternative_models(language)
-            if nlp:
-                _MODEL_CACHE[language] = nlp
-                return nlp
-            # Last resort - create a blank model
+            # If downloading failed, create a blank model
+            logger.error(f"Error downloading {model_name}: {str(download_error)}. Creating blank model.")
+            # Use the language code directly for blank models (spaCy handles this correctly)
             nlp = spacy.blank(language)
             logger.warning(f"Created blank model for {language} as fallback")
             _MODEL_CACHE[language] = nlp
@@ -276,14 +272,12 @@ def detect_language(text: str, specified_lang: Optional[str] = None) -> str:
         # Use langdetect to detect the language
         detected = detect(text)
         
-        # Map some language codes to our supported models
-        lang_mapping = {
-            "en": "en",
-            "es": "es",
-            "ca": "ca",
-        }
-        
-        return lang_mapping.get(detected, "en")
+        # Check if detected language is supported, otherwise default to English
+        if detected in LANG_MODELS:
+            return detected
+        else:
+            logger.info(f"Detected language '{detected}' not supported, defaulting to English")
+            return "en"
     except LangDetectException:
         logger.warning(f"Could not detect language for text: {text[:50]}...")
         return "en"  # Default to English
