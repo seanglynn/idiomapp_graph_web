@@ -20,8 +20,9 @@ from gtts import gTTS
 import base64
 
 # Internal imports
-from idiomapp.utils.ollama_utils import OllamaClient, get_available_models, is_ollama_running
-from idiomapp.utils.logging_utils import setup_logging, get_recent_logs, clear_logs
+from idiomapp.utils.llm_utils import LLMClient, get_available_models, is_ollama_running
+from idiomapp.utils.logging_utils import get_logger, get_recent_logs, clear_logs
+from idiomapp.config import settings
 from idiomapp.utils.nlp_utils import (
     analyze_parts_of_speech,
     split_into_sentences,
@@ -40,7 +41,7 @@ from idiomapp.utils.audio_utils import (
 )
 
 # Set up logging
-logger = setup_logging("streamlit_app")
+logger = get_logger("streamlit_app")
 
 # Language mapping dictionary for consistent reference
 LANGUAGE_MAP = {
@@ -325,70 +326,45 @@ def text_to_speech(text, lang_code=None, message_key=None):
 
 # Add this function to display model status
 def display_model_status(client):
-    """Display the model download status and progress"""
+    """
+    Display the status of the LLM model and check if it's available.
+    
+    Args:
+        client: The LLM client instance.
+        
+    Returns:
+        bool: True if the model is available, False otherwise.
+    """
+    # Get status information from the client
     status = client.get_model_status()
+    provider = status.get("provider", "unknown")
+    model_name = status.get("model_name", "unknown")
+    is_available = status.get("available", False)
     
-    match status["status"]:
-        case "downloading":
-            # Create a progress bar for downloading
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            # Check progress periodically
-            progress = status["download_progress"]
-            progress_bar.progress(int(progress)/100)
-            status_text.info(f"Downloading model {status['model_name']}... {progress:.1f}%")
-            
-            # Add a small wait to allow UI to update
-            import time
-            time.sleep(0.1)
-            
-            # If download just started (progress < 5%), provide additional info
-            if progress < 5:
-                st.warning("""
-                **Model download in progress.**
-                
-                This may take several minutes depending on the model size and your internet connection.
-                You can continue using the app, but AI features will not work until the download completes.
-                """)
-                
-            return False
-            
-        case "not_found":
-            st.error(f"""
-            **Model {status['model_name']} not available.**
-            
-            Error: {status['error']}
-            
-            Please start the model download manually with:
-            ```
-            docker exec -it idiomapp-ollama /bin/bash
-            ollama pull {status['model_name']}
-            ```
-            """)
-            return False
-            
-        case "unknown":
-            st.warning(f"""
-            **Model status unknown.**
-            
-            Could not determine if model {status['model_name']} is available.
-            AI features may not work correctly.
-            
-            Error: {status['error']}
-            """)
-            return False
-            
-        case "available":
-            # Only show a small success message that auto-dismisses
-            pass
-            
-        case _:
-            # Unrecognized status, treat as unavailable
-            st.warning(f"Unknown model status: {status['status']}")
-            return False
+    # Create a container for the status message
+    status_container = st.empty()
     
-    return True
+    # Display status message based on availability
+    if is_available:
+        status_container.success(f"✅ {provider.title()} model '{model_name}' is available")
+        return True
+    else:
+        # Different message based on provider
+        if provider == "ollama":
+            host = status.get("host", "unknown")
+            status_container.error(
+                f"⚠️ Ollama model '{model_name}' is not available. "
+                f"Host: {host}"
+            )
+        elif provider == "openai":
+            status_container.error(
+                f"⚠️ OpenAI model '{model_name}' is not available. "
+                f"API key {'is not set' if not status.get('api_key_set') else 'may be invalid'}"
+            )
+        else:
+            status_container.error(f"⚠️ LLM provider '{provider}' is not available.")
+            
+        return False
 
 async def translate_text(client, source_text, source_lang, target_lang):
     """
@@ -922,6 +898,58 @@ def visualize_translation_graph(graph_data):
         graph_data: Dictionary with nodes and edges
     """
     logger.info(f"Visualizing translation graph")
+    
+    # Validate graph data
+    if not graph_data or not isinstance(graph_data, dict):
+        logger.warning("Invalid or empty graph data provided")
+        st.warning("No graph data available to visualize.")
+        return
+    
+    # Check if this is an error result
+    if graph_data.get("metadata", {}).get("error"):
+        logger.warning("Graph data contains error, skipping visualization")
+        st.warning("Unable to generate graph due to translation errors.")
+        return
+    
+    # Check if we have any nodes to display
+    nodes = graph_data.get("nodes", [])
+    edges = graph_data.get("edges", [])
+    
+    if not nodes:
+        logger.warning("No nodes in graph data")
+        st.info("No words to display in the graph. Try translating more text.")
+        return
+    
+    # Filter out any error-related nodes
+    valid_nodes = []
+    error_keywords = ["translation", "failed", "error", "try", "again"]
+    
+    for node in nodes:
+        node_label = node.get("label", "").lower()
+        if not any(keyword in node_label for keyword in error_keywords):
+            valid_nodes.append(node)
+        else:
+            logger.warning(f"Filtering out error-related node: {node.get('label', '')}")
+    
+    if not valid_nodes:
+        logger.warning("All nodes filtered out as error-related")
+        st.warning("Unable to generate meaningful graph from the translation results.")
+        return
+    
+    # Update graph data with filtered nodes
+    graph_data["nodes"] = valid_nodes
+    
+    # Filter edges that reference filtered-out nodes
+    valid_node_ids = {node["id"] for node in valid_nodes}
+    valid_edges = []
+    
+    for edge in edges:
+        if edge.get("from") in valid_node_ids and edge.get("to") in valid_node_ids:
+            valid_edges.append(edge)
+        else:
+            logger.debug(f"Filtering out edge with invalid node references: {edge.get('from')} -> {edge.get('to')}")
+    
+    graph_data["edges"] = valid_edges
     
     # Create a network with dark mode friendly colors
     net = Network(height="600px", width="100%", bgcolor="#0E1117", font_color="#FAFAFA")
@@ -1848,9 +1876,12 @@ def main():
     Translate text between languages and visualize word relationships in an interactive graph.
     """)
     
-    # Initialize the Ollama client
-    model_name = os.environ.get("DEFAULT_MODEL", "llama3.2:latest")
-    client = OllamaClient(model_name)
+    # Get LLM provider and model from settings
+    llm_provider = settings.llm_provider.value
+    model_name = settings.current_model
+    
+    # Use the factory method to create the appropriate client
+    client = LLMClient.create(provider=llm_provider, model_name=model_name)
     
     # Display model status and check if it's available
     model_available = display_model_status(client)
@@ -1862,8 +1893,10 @@ def main():
         st.session_state["graph_data"] = None
     if "cooccurrence_graphs" not in st.session_state:
         st.session_state["cooccurrence_graphs"] = {}
-    if "ollama_model" not in st.session_state:
-        st.session_state["ollama_model"] = model_name
+    if "llm_provider" not in st.session_state:
+        st.session_state["llm_provider"] = llm_provider
+    if "model_name" not in st.session_state:
+        st.session_state["model_name"] = model_name
     if "chat_history" not in st.session_state:
         st.session_state["chat_history"] = []
     if "show_debug" not in st.session_state:
@@ -1904,14 +1937,6 @@ def main():
         </style>
         """, unsafe_allow_html=True)
         
-        # Create a custom styled button that stands out
-        # doc_button_html = """
-        # <div class="doc-button" onclick="document.getElementById('doc_button_hidden').click()">
-        #     📚 Understanding Language Graphs
-        # </div>
-        # """
-        # st.markdown(doc_button_html, unsafe_allow_html=True)
-        
         # Hidden button that will be triggered by the custom HTML button
         if st.button("📚 Understanding Language Graphs", key="doc_button_hidden", help="Learn about language graphs and how to use them", use_container_width=True):
             st.session_state["show_help_page"] = True
@@ -1920,10 +1945,77 @@ def main():
         # Add a visual separator
         st.markdown("<hr>", unsafe_allow_html=True)
         
+        # LLM Provider selection
+        st.subheader("LLM Provider")
+        provider_options = ["ollama", "openai"]
+        selected_provider = st.selectbox(
+            "AI Provider",
+            provider_options,
+            index=provider_options.index(st.session_state["llm_provider"]) if st.session_state["llm_provider"] in provider_options else 0,
+            format_func=lambda x: x.title(),  # Capitalize for display
+            help="Select the AI provider to use for translation"
+        )
+        
+        # Show provider-specific options
+        if selected_provider == "ollama":
+            available_models = get_available_models() if st.session_state["llm_provider"] == "ollama" else ["llama3.2:latest"]
+            model_name = st.selectbox(
+                f"Ollama Model {'' if st.session_state['model_available'] and st.session_state['llm_provider'] == 'ollama' else '⚠️'}",
+                available_models,
+                index=available_models.index(st.session_state["model_name"]) if st.session_state["model_name"] in available_models else 0,
+                help="Select the Ollama model to use for translation",
+                disabled=not (st.session_state["model_available"] and st.session_state["llm_provider"] == "ollama")
+            )
+        elif selected_provider == "openai":
+            openai_models = settings.openai_models_list
+            model_name = st.selectbox(
+                f"OpenAI Model {'' if st.session_state['model_available'] and st.session_state['llm_provider'] == 'openai' else '⚠️'}",
+                openai_models,
+                index=openai_models.index(st.session_state["model_name"]) if st.session_state["model_name"] in openai_models else 0,
+                help="Select the OpenAI model to use for translation",
+                disabled=not (st.session_state["model_available"] and st.session_state["llm_provider"] == "openai")
+            )
+            
+            # Show API key input if OpenAI is selected
+            openai_api_key = st.text_input(
+                "OpenAI API Key",
+                type="password",
+                value=settings.openai_api_key,
+                help="Enter your OpenAI API key to use ChatGPT"
+            )
+            
+            # Update session state and environment if API key changes
+            if openai_api_key != settings.openai_api_key:
+                # Update the global config settings temporarily 
+                # Note: This is a runtime update, the config object itself doesn't persist changes
+                os.environ["OPENAI_API_KEY"] = openai_api_key
+                if openai_api_key:
+                    st.success("API key updated. Reinitializing client...")
+                    # Force reinitialization of client with new API key
+                    st.session_state["model_available"] = False
+                    st.rerun()
+        
+        # Update client if provider or model changes
+        if selected_provider != st.session_state["llm_provider"] or model_name != st.session_state["model_name"]:
+            st.session_state["llm_provider"] = selected_provider
+            st.session_state["model_name"] = model_name
+            # Update environment variables for runtime changes
+            os.environ["LLM_PROVIDER"] = selected_provider
+            if selected_provider == "ollama":
+                os.environ["DEFAULT_MODEL"] = model_name
+            else:
+                os.environ["OPENAI_MODEL"] = model_name
+            # Force reinitialization of client
+            st.info("Provider or model changed. Reinitializing client...")
+            st.session_state["model_available"] = False
+            st.rerun()
+        
         # Language selection
+        st.header("Language Settings")
         source_lang = st.selectbox(
             "Source Language",
-            ["en", "es", "ca"],
+            settings.supported_languages_list,
+            index=settings.supported_languages_list.index(settings.default_source_language) if settings.default_source_language in settings.supported_languages_list else 0,
             format_func=lambda x: f"{LANGUAGE_MAP[x]['name']} {LANGUAGE_MAP[x]['flag']}",
             help="Select the source language"
         )
@@ -1931,8 +2023,8 @@ def main():
         # Multiple target languages selection
         target_langs = st.multiselect(
             "Target Languages",
-            ["es", "en", "ca"],
-            default=["es", "ca"],  # Default to Spanish and Catalan
+            settings.supported_languages_list,
+            default=settings.default_target_languages_list,
             format_func=lambda x: f"{LANGUAGE_MAP[x]['name']} {LANGUAGE_MAP[x]['flag']}",
             help="Select one or more target languages"
         )
@@ -1940,14 +2032,14 @@ def main():
         # Ensure at least one target language is selected
         if not target_langs:
             st.warning("Please select at least one target language")
-            target_langs = ["es"]  # Default to Spanish if none selected
-            
+            target_langs = settings.default_target_languages_list[:1]  # Use first default target language
+        
         # Model selection with status indication
             available_models = get_available_models()
             model_name = st.selectbox(
             f"Translation Model {'' if st.session_state['model_available'] else '⚠️'}",
                 available_models,
-                index=available_models.index(st.session_state["ollama_model"]) if st.session_state["ollama_model"] in available_models else 0,
+                index=available_models.index(st.session_state["model_name"]) if st.session_state["model_name"] in available_models else 0,
             help="Select the AI model to use for translation",
             disabled=not st.session_state["model_available"]
         )
@@ -1958,7 +2050,7 @@ def main():
         else:
             st.success("✅ AI model is ready to use")
             
-            st.session_state["ollama_model"] = model_name
+            st.session_state["model_name"] = model_name
             
         # Switch for visualization type
         st.header("Visualization Settings")
@@ -1977,7 +2069,7 @@ def main():
                 "Window Size", 
                 min_value=1, 
                 max_value=5, 
-                value=2,
+                value=settings.default_window_size,
                 help="Number of words to consider for co-occurrence (larger = more connections)"
             )
             st.session_state["window_size"] = window_size
@@ -1987,7 +2079,7 @@ def main():
                 "Minimum Word Frequency", 
                 min_value=1, 
                 max_value=5, 
-                value=1,
+                value=settings.default_min_frequency,
                 help="Minimum times a word must appear to be included"
             )
             st.session_state["min_freq"] = min_freq
@@ -2003,7 +2095,7 @@ def main():
             selected_pos = st.multiselect(
                 "Part of Speech Filter",
                 options=[tag for _, tag in pos_options],
-                default=["NOUN", "VERB", "ADJ"],
+                default=settings.default_pos_filter_list,
                 format_func=lambda x: next((name for name, tag in pos_options if tag == x), x),
                 help="Filter words by part of speech"
             )
@@ -2354,7 +2446,7 @@ def main():
             
             try:
                 # Create Ollama client with selected model
-                client = OllamaClient(model_name=st.session_state["ollama_model"])
+                client = LLMClient.create(provider=st.session_state["llm_provider"], model_name=st.session_state["model_name"])
                 
                 # Store overall translation results
                 all_translations = {}
