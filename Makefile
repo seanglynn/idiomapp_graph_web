@@ -1,12 +1,12 @@
 # Local development
 install:
-	poetry install
+	uv sync
 
 run-graph: install
-	poetry run python -m idiomapp.streamlit.app
+	uv run python -m idiomapp.streamlit.app
 
 run-graph-dev: install
-	poetry run streamlit run idiomapp/streamlit/app.py --server.runOnSave=true
+	uv run streamlit run idiomapp/streamlit/app.py --server.runOnSave=true
 
 # Docker commands - interactive by default
 docker-start:

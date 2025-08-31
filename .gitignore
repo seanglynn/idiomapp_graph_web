@@ -6,3 +6,4 @@ logs/*
 ollama-models/**
 .venv
 .idea/
+.vscode/settings.json
