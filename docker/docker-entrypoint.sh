@@ -28,6 +28,9 @@ elif [ "${LLM_PROVIDER:-ollama}" = "openai" ]; then
   else
     echo "- OpenAI API key: [CONFIGURED]"
   fi
+  if [ -n "${OPENAI_ORGANIZATION}" ]; then
+    echo "- OpenAI organization: ${OPENAI_ORGANIZATION}"
+  fi
 fi
 
 # Execute the command provided (or default to streamlit run)

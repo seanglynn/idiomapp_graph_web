@@ -87,6 +87,7 @@ DEFAULT_MODEL=llama3.2:latest
 
 # OpenAI configuration (if using OpenAI)
 OPENAI_API_KEY=your_openai_api_key_here
+OPENAI_ORGANIZATION=your_openai_organization_id_here
 OPENAI_MODEL=gpt-3.5-turbo
 
 # Logging
@@ -107,6 +108,7 @@ STREAMLIT_SERVER_ADDRESS=localhost  # Use 0.0.0.0 for Docker
 | `OLLAMA_HOST` | URL of the Ollama service (when using Ollama) | `http://localhost:11434` |
 | `DEFAULT_MODEL` | Default Ollama model to use | `llama3.2:latest` |
 | `OPENAI_API_KEY` | OpenAI API key (when using OpenAI) | empty |
+| `OPENAI_ORGANIZATION` | OpenAI organization ID (when using OpenAI) | empty |
 | `OPENAI_MODEL` | OpenAI model to use | `gpt-3.5-turbo` |
 | `LOG_LEVEL` | Logging level | `INFO` |
 | `STREAMLIT_SERVER_PORT` | Port for Streamlit server | `8503` |
