@@ -1,26 +1,18 @@
 import os
 import re
 import json
-import logging
 import asyncio
 import tempfile
-import time
 import html
-from typing import Dict, List, Any, Optional
 
 # Third-party imports
 import streamlit as st 
-import networkx as nx
 from pyvis.network import Network
-import spacy
-import textacy
-from langdetect import detect, LangDetectException
 from streamlit.logger import get_logger
-from gtts import gTTS
-import base64
 
 # Internal imports
-from idiomapp.utils.llm_utils import LLMClient, get_available_models, get_openai_available_models
+from idiomapp.utils.llm_utils import LLMClient, get_openai_available_models
+from idiomapp.utils.ollama_utils import get_available_models
 from idiomapp.utils.logging_utils import get_logger, get_recent_logs, clear_logs
 from idiomapp.config import settings
 from idiomapp.utils.nlp_utils import (
@@ -30,14 +22,10 @@ from idiomapp.utils.nlp_utils import (
     build_word_cooccurrence_network,
     visualize_cooccurrence_network,
     detect_language,
-    get_network_stats,
-    load_spacy_model,
     get_language_color,
 )
 from idiomapp.utils.audio_utils import (
-    generate_audio,
-    clean_text_for_tts,
-    extract_translation_content
+    generate_audio
 )
 
 # Set up logging
@@ -166,7 +154,7 @@ def render_chat_message(message, role, target_lang=None):
             # Create a unique key for this message using content hash
             # This ensures unique keys even if the app reruns
             message_hash = hash(message)
-            message_key = f"tts_{message_hash}"
+            f"tts_{message_hash}"
             
             # Display message 
             if is_translation:
@@ -811,7 +799,7 @@ def add_cross_sentence_relationships(graph_data):
                                     continue
                                 
                                 similarity_score = similarity_info.get("score", 0)
-                                relationship_type = similarity_info.get("relationship_type", "cross_sentence")
+                                similarity_info.get("relationship_type", "cross_sentence")
                                 description = similarity_info.get("description", f"Related {pos1} words across sentences")
                                 
                                 # Connect only if there's some similarity or same POS for key types
@@ -1964,6 +1952,8 @@ def main():
         st.session_state["audio_cache"] = {}
     if "current_view" not in st.session_state:
         st.session_state["current_view"] = "semantic"
+    if "openai_organization" not in st.session_state:
+        st.session_state["openai_organization"] = settings.openai_organization
     
     # Now get LLM provider and model from properly initialized session state
     llm_provider = st.session_state["llm_provider"]
@@ -1983,10 +1973,16 @@ def main():
         if llm_provider == "openai" and "openai_api_key" in st.session_state:
             api_key = st.session_state["openai_api_key"]
         
+        # Get organization from session state if using OpenAI
+        organization = None
+        if llm_provider == "openai" and "openai_organization" in st.session_state:
+            organization = st.session_state["openai_organization"]
+        
         st.session_state["llm_client"] = LLMClient.create(
             provider=llm_provider, 
             model_name=model_name, 
-            api_key=api_key
+            api_key=api_key,
+            organization=organization
         )
         # Clear model status cache to force recheck
         if "model_status_displayed_once" in st.session_state:
@@ -2068,7 +2064,8 @@ def main():
         elif selected_provider == "openai":
             # Dynamically fetch available OpenAI models instead of using hardcoded list
             openai_models = get_openai_available_models(
-                st.session_state.get("openai_api_key", settings.openai_api_key)
+                st.session_state.get("openai_api_key", settings.openai_api_key),
+                st.session_state.get("openai_organization", settings.openai_organization)
             )
             model_name = st.selectbox(
                 f"OpenAI Model {'' if st.session_state['model_available'] and st.session_state['llm_provider'] == 'openai' else '⚠️'}",
@@ -2086,14 +2083,32 @@ def main():
                 help="Enter your OpenAI API key to use ChatGPT"
             )
             
-            # Update session state if API key changes
-            if openai_api_key != settings.openai_api_key:
-                # Store the API key securely in session state only - NOT in environment variables
+            # Show organization input if OpenAI is selected
+            openai_organization = st.text_input(
+                "OpenAI Organization ID (Optional)",
+                value=settings.openai_organization,
+                help="Enter your OpenAI organization ID if you're part of an organization"
+            )
+            
+            # Update session state if API key or organization changes
+            api_key_changed = openai_api_key != settings.openai_api_key
+            org_changed = openai_organization != settings.openai_organization
+            
+            if api_key_changed or org_changed:
+                # Store the API key and organization securely in session state only - NOT in environment variables
                 if openai_api_key:
-                    st.success("API key updated. Reinitializing client...")
+                    st.success("OpenAI credentials updated. Reinitializing client...")
                     # Store API key in session state for secure access
                     st.session_state["openai_api_key"] = openai_api_key
-                    # Force reinitialization of client with new API key
+                    # Store organization in session state for secure access
+                    if openai_organization:
+                        st.session_state["openai_organization"] = openai_organization
+                    else:
+                        # Clear organization from session state if it's empty
+                        if "openai_organization" in st.session_state:
+                            del st.session_state["openai_organization"]
+                    
+                    # Force reinitialization of client with new credentials
                     st.session_state["model_available"] = False
                     # Set a flag to trigger reinitialization on next interaction
                     st.session_state["needs_client_reinit"] = True
@@ -2105,6 +2120,8 @@ def main():
                     # Clear the API key from session state if it's empty
                     if "openai_api_key" in st.session_state:
                         del st.session_state["openai_api_key"]
+                    if "openai_organization" in st.session_state:
+                        del st.session_state["openai_organization"]
                     st.warning("API key cleared. Please enter a valid API key to use OpenAI.")
         
         # Update client if provider or model changes
@@ -2546,11 +2563,21 @@ def main():
             asyncio.set_event_loop(loop)
             
             try:
-                # Create Ollama client with selected model
-                client = LLMClient.create(provider=st.session_state["llm_provider"], model_name=st.session_state["model_name"])
+                # Create LLM client with selected provider and model
+                api_key = None
+                organization = None
+                if st.session_state["llm_provider"] == "openai":
+                    api_key = st.session_state.get("openai_api_key")
+                    organization = st.session_state.get("openai_organization")
+                
+                client = LLMClient.create(
+                    provider=st.session_state["llm_provider"], 
+                    model_name=st.session_state["model_name"],
+                    api_key=api_key,
+                    organization=organization
+                )
                 
                 # Store overall translation results
-                all_translations = {}
                 all_graph_data = {}
                 cooccurrence_graphs = {}
                 

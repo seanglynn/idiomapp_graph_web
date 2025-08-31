@@ -277,8 +277,20 @@ def get_llm_client():
         current_provider = st.session_state.get("llm_provider", settings.llm_provider.value)
         current_model = st.session_state.get("model_name", settings.current_model)
         
+        # Get API key and organization from session state if using OpenAI
+        api_key = None
+        organization = None
+        if current_provider == "openai":
+            api_key = st.session_state.get("openai_api_key")
+            organization = st.session_state.get("openai_organization")
+        
         logger.info(f"Creating new LLM client for {current_provider}:{current_model}")
-        client = LLMClient.create(provider=current_provider, model_name=current_model)
+        client = LLMClient.create(
+            provider=current_provider, 
+            model_name=current_model,
+            api_key=api_key,
+            organization=organization
+        )
         
         # Cache the client
         st.session_state["llm_client"] = client

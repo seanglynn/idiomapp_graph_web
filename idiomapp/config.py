@@ -52,6 +52,7 @@ class IdiomaAppSettings(BaseSettings):
     
     # OpenAI configuration
     openai_api_key: str = ""
+    openai_organization: str = ""
     openai_model: str = "gpt-3.5-turbo"
     openai_temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="Controls randomness in OpenAI responses (0.0-2.0)")
     openai_max_tokens: int = Field(default=1024, ge=1, le=4096, description="Maximum tokens in OpenAI responses")
@@ -165,4 +166,145 @@ def get_model_by_provider(provider: str) -> str:
 
 def is_valid_provider(provider: str) -> bool:
     """Check if the given provider is valid."""
-    return provider.lower() in [e.value for e in LLMProvider] 
+    return provider.lower() in [e.value for e in LLMProvider]
+
+
+# Model capabilities configuration for OpenAI models
+# This provides a centralized, maintainable way to configure model-specific behavior
+MODEL_CAPABILITIES: Dict[str, Dict[str, Any]] = {
+    # GPT-5 models - strict parameter requirements
+    "gpt-5": {
+        "supports_max_completion_tokens": True,
+        "supports_custom_temperature": False,
+        "supports_custom_max_tokens": True,
+        "description": "GPT-5 model with strict parameter requirements",
+        "notes": "Only supports default temperature (1.0), uses max_completion_tokens"
+    },
+    "gpt-5-mini": {
+        "supports_max_completion_tokens": True,
+        "supports_custom_temperature": False,
+        "supports_custom_max_tokens": True,
+        "description": "GPT-5 mini model with strict parameter requirements",
+        "notes": "Only supports default temperature (1.0), uses max_completion_tokens"
+    },
+    
+    # GPT-4o models - modern parameter support
+    "gpt-4o": {
+        "supports_max_completion_tokens": True,
+        "supports_custom_temperature": True,
+        "supports_custom_max_tokens": True,
+        "description": "GPT-4o model with modern parameter support",
+        "notes": "Full parameter support including custom temperature"
+    },
+    "gpt-4o-mini": {
+        "supports_max_completion_tokens": True,
+        "supports_custom_temperature": True,
+        "supports_custom_max_tokens": True,
+        "description": "GPT-4o mini model with modern parameter support",
+        "notes": "Full parameter support including custom temperature"
+    },
+    
+    # Claude models
+    "claude-3": {
+        "supports_max_completion_tokens": True,
+        "supports_custom_temperature": True,
+        "supports_custom_max_tokens": True,
+        "description": "Claude-3 model with modern parameter support",
+        "notes": "Full parameter support including custom temperature"
+    },
+    "claude-3.5": {
+        "supports_max_completion_tokens": True,
+        "supports_custom_temperature": True,
+        "supports_custom_max_tokens": True,
+        "description": "Claude-3.5 model with modern parameter support",
+        "notes": "Full parameter support including custom temperature"
+    },
+    
+    # Standard GPT models
+    "gpt-4": {
+        "supports_max_completion_tokens": False,
+        "supports_custom_temperature": True,
+        "supports_custom_max_tokens": True,
+        "description": "Standard GPT-4 model",
+        "notes": "Uses max_tokens, supports custom temperature"
+    },
+    "gpt-3.5": {
+        "supports_max_completion_tokens": False,
+        "supports_custom_temperature": True,
+        "supports_custom_max_tokens": True,
+        "description": "Standard GPT-3.5 model",
+        "notes": "Uses max_tokens, supports custom temperature"
+    },
+    
+    # Legacy models
+    "gpt-3": {
+        "supports_max_completion_tokens": False,
+        "supports_custom_temperature": True,
+        "supports_custom_max_tokens": True,
+        "description": "Legacy GPT-3 model",
+        "notes": "Uses max_tokens, supports custom temperature"
+    }
+}
+
+def get_model_capabilities(model_name: str) -> Dict[str, Any]:
+    """
+    Get capabilities for a specific model.
+    
+    Args:
+        model_name: The name of the model to get capabilities for
+        
+    Returns:
+        dict: Model capabilities including parameter support
+    """
+    # Try to find exact match first
+    for model_pattern, capabilities in MODEL_CAPABILITIES.items():
+        if model_pattern in model_name:
+            return capabilities
+    
+    # Fallback: infer capabilities from model name patterns
+    if any(prefix in model_name for prefix in ["gpt-5"]):
+        return {
+            "supports_max_completion_tokens": True,
+            "supports_custom_temperature": False,
+            "supports_custom_max_tokens": True,
+            "description": "Inferred GPT-5 capabilities",
+            "notes": "Inferred from model name pattern"
+        }
+    elif any(prefix in model_name for prefix in ["gpt-4o", "claude-3"]):
+        return {
+            "supports_max_completion_tokens": True,
+            "supports_custom_temperature": True,
+            "supports_custom_max_tokens": True,
+            "description": "Inferred modern model capabilities",
+            "notes": "Inferred from model name pattern"
+        }
+    else:
+        # Default to legacy model capabilities
+        return {
+            "supports_max_completion_tokens": False,
+            "supports_custom_temperature": True,
+            "supports_custom_max_tokens": True,
+            "description": "Default legacy model capabilities",
+            "notes": "Default fallback for unknown models"
+        }
+
+def is_model_supported(model_name: str) -> bool:
+    """
+    Check if a model is supported by checking if we have capability information.
+    
+    Args:
+        model_name: The name of the model to check
+        
+    Returns:
+        bool: True if the model is supported
+    """
+    return any(pattern in model_name for pattern in MODEL_CAPABILITIES.keys())
+
+def get_supported_models() -> list:
+    """
+    Get a list of all supported model patterns.
+    
+    Returns:
+        list: List of supported model patterns
+    """
+    return list(MODEL_CAPABILITIES.keys()) 

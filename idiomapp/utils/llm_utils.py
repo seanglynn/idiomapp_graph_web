@@ -1,19 +1,16 @@
-import os
 from abc import ABC, abstractmethod
-from typing import Dict, List, Any, Optional
-import json
+from typing import Dict, Any, Optional
 
 # For Ollama
 import ollama
-import httpx
-import requests
 
 # For OpenAI
 from openai import OpenAI
 from openai.types.chat import ChatCompletion
 
 from idiomapp.utils.logging_utils import get_logger
-from idiomapp.config import settings, LLMProvider
+from idiomapp.config import settings, LLMProvider, get_model_capabilities
+from idiomapp.utils.ollama_utils import get_valid_ollama_host, get_available_models, pull_model_if_needed
 
 # Set up logging using the new cached logger
 logger = get_logger("llm_utils")
@@ -24,22 +21,20 @@ class LLMClient(ABC):
     @abstractmethod
     async def generate_text(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         """Generate text from a prompt"""
-        pass
     
     @abstractmethod
     def get_model_status(self) -> Dict[str, Any]:
         """Get the status of the model"""
-        pass
     
     @classmethod
-    def create(cls, provider: str = None, model_name: str = None, api_key: str = None) -> 'LLMClient':
+    def create(cls, provider: str = None, model_name: str = None, api_key: str = None, organization: str = None) -> 'LLMClient':
         """Factory method to create the appropriate LLM client"""
         provider = provider or settings.llm_provider.value
         
         if provider == LLMProvider.OLLAMA.value:
             return OllamaClient(model_name or settings.default_model)
         elif provider == LLMProvider.OPENAI.value:
-            return OpenAIClient(model_name or settings.openai_model, api_key)
+            return OpenAIClient(model_name or settings.openai_model, api_key, organization)
         else:
             logger.error(f"Unknown LLM provider: {provider}, falling back to Ollama")
             return OllamaClient(model_name or settings.default_model)
@@ -128,57 +123,28 @@ class OllamaClient(LLMClient):
             return "Error: Model not available. Please check if Ollama is running and the model is installed."
             
         try:
-            # Prepare the request - set stream to False for single response
-            request_data = {
-                "model": self.model_name,
-                "prompt": prompt,
-                "stream": False  # This ensures we get a single JSON response instead of streaming
-            }
-            
+            # Prepare the prompt
+            full_prompt = prompt
             if system_prompt:
-                request_data["system"] = system_prompt
-                
-            logger.info(f"Generating text with model {self.model_name}")
-            logger.debug(f"Prompt: {prompt[:100]}...")
-                
+                full_prompt = f"{system_prompt}\n\n{prompt}"
+            
+            logger.info(f"Generating text with Ollama model {self.model_name}")
+            logger.debug(f"Prompt: {full_prompt[:100]}...")
+            
             # Make API request
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"{self.ollama_host}/api/generate",
-                    json=request_data,
-                    timeout=60.0
-                )
-                
-                if response.status_code != 200:
-                    error_msg = f"Error generating text: HTTP {response.status_code}"
-                    logger.error(f"{error_msg} - {response.text}")
-                    response.raise_for_status()
-                    return f"Error: Failed to generate text. {error_msg}"
-                # Parse response JSON safely
-                try:
-                    response_data = response.json()
-                    generated_text = response_data.get("response", "")
-                    
-                    if not generated_text:
-                        logger.warning("Empty response from model")
-                        return "Error: Model returned empty response"
-                    
-                    logger.info(f"Generated text length: {len(generated_text)}")
-                    logger.debug(f"Response: {generated_text[:100]}...")
-                    
-                    return generated_text
-                    
-                except json.JSONDecodeError as e:
-                    logger.error(f"Failed to parse JSON response: {str(e)}")
-                    logger.error(f"Raw response: {response.text[:200]}...")
-                    return f"Error: Invalid response format from model"
-                
-        except httpx.TimeoutException:
-            logger.error("Request timeout while generating text")
-            return "Error: Request timeout. The model is taking too long to respond."
-        except httpx.RequestError as e:
-            logger.error(f"Network error while generating text: {str(e)}")
-            return f"Error: Network error - {str(e)}"
+            response = ollama.chat(
+                model=self.model_name,
+                messages=[{"role": "user", "content": full_prompt}]
+            )
+            
+            # Extract response text
+            generated_text = response['message']['content'] or ""
+            
+            logger.info(f"Generated text length: {len(generated_text)}")
+            logger.debug(f"Response: {generated_text[:100]}...")
+            
+            return generated_text
+            
         except Exception as e:
             logger.error(f"Unexpected error generating text: {str(e)}")
             return f"Error: {str(e)}"
@@ -187,7 +153,7 @@ class OllamaClient(LLMClient):
 class OpenAIClient(LLMClient):
     """Client for interacting with OpenAI models."""
     
-    def __init__(self, model_name=None, api_key: str = None):
+    def __init__(self, model_name=None, api_key: str = None, organization: str = None):
         """
         Initialize the OpenAI client.
         
@@ -195,18 +161,25 @@ class OpenAIClient(LLMClient):
             model_name: The name of the model to use. If None, uses the OPENAI_MODEL
                         from settings.
             api_key: OpenAI API key. If None, uses the one from settings.
+            organization: OpenAI organization ID. If None, uses the one from settings.
         """
         self.api_key = api_key or settings.openai_api_key
+        self.organization = organization or settings.openai_organization
         self.model_name = model_name or settings.openai_model
         
         # Set client configuration
         logger.info(f"Initializing OpenAI client with model: {self.model_name}")
+        if self.organization:
+            logger.info(f"Using OpenAI organization: {self.organization}")
         
         # Initialize the OpenAI client
         if not self.api_key:
             logger.error("OPENAI_API_KEY environment variable not set")
         else:
-            self.client = OpenAI(api_key=self.api_key)
+            client_kwargs = {"api_key": self.api_key}
+            if self.organization:
+                client_kwargs["organization"] = self.organization
+            self.client = OpenAI(**client_kwargs)
     
     def get_model_status(self):
         """
@@ -252,14 +225,32 @@ class OpenAIClient(LLMClient):
             logger.info(f"Generating text with OpenAI model {self.model_name}")
             logger.debug(f"Prompt: {prompt[:100]}...")
             
+            # Prepare API request parameters
+            request_params = {
+                "model": self.model_name,
+                "messages": messages
+            }
+            
+            # Get model capabilities and use appropriate parameters
+            model_capabilities = get_model_capabilities(self.model_name)
+            
+            # Add token limit parameter based on model capabilities
+            if model_capabilities.get("supports_max_completion_tokens", False):
+                request_params["max_completion_tokens"] = settings.openai_max_tokens
+                logger.debug(f"Using max_completion_tokens for model {self.model_name}")
+            else:
+                request_params["max_tokens"] = settings.openai_max_tokens
+                logger.debug(f"Using max_tokens for model {self.model_name}")
+            
+            # Add temperature if supported by the model
+            if model_capabilities.get("supports_custom_temperature", True):
+                request_params["temperature"] = settings.openai_temperature
+                logger.debug(f"Using custom temperature {settings.openai_temperature} for model {self.model_name}")
+            else:
+                logger.debug(f"Using default temperature for model {self.model_name}")
+            
             # Make API request
-            response: ChatCompletion = self.client.chat.completions.create(
-                model=self.model_name,
-                messages=messages,
-                temperature=settings.openai_temperature,
-                max_tokens=settings.openai_max_tokens
-            )
-
+            response: ChatCompletion = self.client.chat.completions.create(**request_params)
             
             # Extract response text
             generated_text = response.choices[0].message.content or ""
@@ -270,22 +261,56 @@ class OpenAIClient(LLMClient):
             return generated_text
             
         except Exception as e:
-            logger.error(f"Error generating text with OpenAI: {str(e)}")
+            error_msg = str(e)
+            logger.error(f"Error generating text with OpenAI: {error_msg}")
+            
+            # Handle specific parameter errors and try fallback
+            if "max_tokens" in error_msg and "max_completion_tokens" in error_msg:
+                logger.info(f"Attempting fallback with max_completion_tokens for model {self.model_name}")
+                try:
+                    # Try with max_completion_tokens instead
+                    fallback_params = {
+                        "model": self.model_name,
+                        "messages": messages,
+                        "max_completion_tokens": settings.openai_max_tokens
+                    }
+                    
+                    # Only add temperature if it's supported by this model
+                    model_capabilities = get_model_capabilities(self.model_name)
+                    if model_capabilities.get("supports_custom_temperature", True):
+                        fallback_params["temperature"] = settings.openai_temperature
+                    
+                    response: ChatCompletion = self.client.chat.completions.create(**fallback_params)
+                    generated_text = response.choices[0].message.content or ""
+                    
+                    logger.info(f"Fallback successful with max_completion_tokens")
+                    logger.info(f"Generated text length: {len(generated_text)}")
+                    logger.debug(f"Response: {generated_text[:100]}...")
+                    
+                    return generated_text
+                    
+                except Exception as fallback_error:
+                    logger.error(f"Fallback attempt also failed: {str(fallback_error)}")
+            
             raise e
 
 # Helper functions from the original ollama_utils.py
-def get_openai_available_models(api_key: str = None) -> list:
+def get_openai_available_models(api_key: str = None, organization: str = None) -> list:
     """
     Get a list of available OpenAI models from their API.
     
     Args:
         api_key: OpenAI API key. If None, tries to get from settings.
+        organization: OpenAI organization ID. If None, tries to get from settings.
         
     Returns:
         list: List of available model names
     """
     if not api_key:
         api_key = settings.openai_api_key
+    
+    if not organization:
+        organization = settings.openai_organization
     
     if not api_key:
         logger.warning("No OpenAI API key provided, cannot fetch available models")
@@ -294,7 +319,11 @@ def get_openai_available_models(api_key: str = None) -> list:
     try:
         from openai import OpenAI
         
-        client = OpenAI(api_key=api_key)
+        client_kwargs = {"api_key": api_key}
+        if organization:
+            client_kwargs["organization"] = organization
+        
+        client = OpenAI(**client_kwargs)
         response = client.models.list()
         
         # Extract model IDs and filter for chat models
@@ -316,162 +345,4 @@ def get_openai_available_models(api_key: str = None) -> list:
         # Return fallback models if API call fails
         return ["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo"]
 
-def is_ollama_running():
-    """
-    Check if Ollama is running and accessible through any of the potential hosts.
-    
-    Returns:
-        tuple: (bool, str) - (is_running, host_url if running, None if not)
-    """
-    # Define fallback hosts to try if the primary host fails
-    FALLBACK_HOSTS = [
-        "http://localhost:11434",  # Local development
-        "http://ollama:11434",     # Docker service name
-        "http://host.docker.internal:11434"  # Mac/Windows Docker to host
-    ]
-    
-    # First check the configured host
-    configured_host = settings.ollama_host
-    logger.info(f"Checking if Ollama is running at {configured_host}...")
-    
-    try:
-        response = requests.get(f"{configured_host}/api/version", timeout=2.0)
-        if response.status_code == 200:
-            logger.info(f"Ollama is running at {configured_host}")
-            return True, configured_host
-    except Exception as e:
-        logger.warning(f"Ollama not reachable at {configured_host}: {str(e)}")
-    
-    # If primary host failed, try fallbacks
-    for host in FALLBACK_HOSTS:
-        if host == configured_host:
-            continue  # Already tried this one
-            
-        logger.info(f"Checking if Ollama is running at fallback {host}...")
-        try:
-            response = requests.get(f"{host}/api/version", timeout=2.0)
-            if response.status_code == 200:
-                logger.info(f"Ollama is running at fallback {host}")
-                return True, host
-        except Exception as e:
-            logger.warning(f"Ollama not reachable at fallback {host}: {str(e)}")
-    
-    logger.error("Ollama service is not reachable at any configured host")
-    return False, None
-
-def get_valid_ollama_host():
-    """
-    Try to find a valid Ollama host by checking each potential host.
-    
-    Returns:
-        str: A valid Ollama host URL, or the default one if none work
-    """
-    # Check if Ollama is running anywhere
-    is_running, running_host = is_ollama_running()
-    if is_running:
-        return running_host
-        
-    # If all else fails, return the configured host (which will likely fail again, but it's our default)
-    logger.error("Could not find any working Ollama host, returning configured host")
-    return settings.ollama_host
-
-def get_available_models():
-    """
-    Get a list of available Ollama models.
-    
-    Returns:
-        list: List of available model names
-    """
-    models = []
-    host = get_valid_ollama_host()
-    
-    try:
-        # Try to use the API to get available models
-        response = requests.get(f"{host}/api/tags", timeout=5.0)
-        if response.status_code == 200:
-            data = response.json()
-            
-            # Extract model names from response
-            if "models" in data and isinstance(data["models"], list):
-                for model in data["models"]:
-                    if "name" in model and model["name"]:
-                        models.append(model["name"])
-            else:
-                logger.warning("Unexpected response format when getting models")
-    except Exception as e:
-        logger.error(f"Error getting available models: {str(e)}")
-        
-    return models
-
-def pull_model_if_needed(model_name):
-    """
-    Check if a model needs to be pulled and pull it if it doesn't exist.
-    
-    Args:
-        model_name: The name of the model to check/pull
-        
-    Returns:
-        bool: True if the model is now available, False otherwise
-    """
-    logger.info(f"Checking if model {model_name} needs to be pulled...")
-    
-    # Get available models
-    try:
-        available_models = get_available_models()
-        logger.info(f"Available models before pull attempt: {available_models}")
-        
-        # If model already exists, no need to pull
-        if model_name in available_models:
-            logger.info(f"Model {model_name} is already available")
-            return True
-            
-        # Model doesn't exist, attempt to pull it
-        logger.info(f"Model {model_name} not found, attempting to pull...")
-        
-        # Get a valid host to connect to
-        ollama_host = get_valid_ollama_host()
-        
-        # Set OLLAMA_HOST environment variable temporarily for the native client
-        original_env = os.environ.get("OLLAMA_HOST")
-        os.environ["OLLAMA_HOST"] = ollama_host
-        
-        try:
-            # Try to pull the model using the native client
-            logger.info(f"Pulling model {model_name} using native client...")
-            ollama.pull(model_name)
-            logger.info(f"Successfully pulled model {model_name}")
-            return True
-        except Exception as e:
-            logger.warning(f"Failed to pull model using native client: {str(e)}")
-            
-            # Try using the HTTP API if native client fails
-            try:
-                logger.info(f"Pulling model {model_name} using HTTP API...")
-                response = requests.post(
-                    f"{ollama_host}/api/pull",
-                    json={"name": model_name},
-                    timeout=300.0  # Longer timeout for model pulls
-                )
-                response.raise_for_status()
-                logger.info(f"Successfully initiated pull for model {model_name}")
-                
-                # Check if model is now available
-                available_models = get_available_models()
-                if model_name in available_models:
-                    logger.info(f"Model {model_name} is now available")
-                    return True
-                else:
-                    logger.warning(f"Model {model_name} pull initiated but model not immediately available")
-                    return False
-            except Exception as e:
-                logger.error(f"Failed to pull model using HTTP API: {str(e)}")
-                return False
-        finally:
-            # Restore original environment
-            if original_env:
-                os.environ["OLLAMA_HOST"] = original_env
-            elif "OLLAMA_HOST" in os.environ:
-                del os.environ["OLLAMA_HOST"]
-    except Exception as e:
-        logger.error(f"Error checking/pulling model: {str(e)}")
-        return False 
+# Ollama-specific functions have been moved to ollama_utils.py

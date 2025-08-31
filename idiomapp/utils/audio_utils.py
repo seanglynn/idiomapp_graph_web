@@ -7,7 +7,7 @@ import logging
 import re
 import io
 import base64
-from typing import Dict, Optional, Any
+from typing import Optional
 
 # Text-to-speech
 from gtts import gTTS
@@ -88,7 +88,6 @@ def extract_translation_content(text: str, language_mark: str) -> str:
             if next_lang_pos != -1:
                 content = content[:next_lang_pos].strip()
             
-            
             return content
     
     # If no specific translation found, return the original text
@@ -122,7 +121,10 @@ def generate_audio(text: str, lang_code: Optional[str] = None) -> str:
         if lang_code in language_markers and any(marker in original_text for marker in language_markers.values()):
             # Extract just the translation for this language
             language_mark = language_markers[lang_code]
+            logger.info(f"Extracting text for {lang_code} using marker: {language_mark}")
+            logger.info(f"Original text: {original_text}")
             text = extract_translation_content(original_text, language_mark)
+            logger.info(f"Extracted text: '{text}' (length: {len(text) if text else 0})")
         
         # Remove any language tag lines
         if "(LANG TAG:" in text:
