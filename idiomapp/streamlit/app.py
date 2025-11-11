@@ -119,6 +119,287 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# Helper functions for language selection UI
+def format_language_option(lang_code: str) -> str:
+    """
+    Format a language code for display in selectboxes.
+    
+    Args:
+        lang_code: Language code (e.g., 'en', 'es', 'ca')
+        
+    Returns:
+        Formatted string with language name and flag emoji
+    """
+    if lang_code in LANGUAGE_MAP:
+        lang_info = LANGUAGE_MAP[lang_code]
+        return f"{lang_info['name']} {lang_info['flag']}"
+    # Fallback if language code not found
+    return lang_code.upper()
+
+
+def get_language_index(language_list: list, target_lang: str, default: int = 0) -> int:
+    """
+    Safely get the index of a language in a list.
+    
+    Args:
+        language_list: List of language codes
+        target_lang: Language code to find
+        default: Default index to return if not found
+        
+    Returns:
+        Index of target_lang in language_list, or default if not found
+    """
+    try:
+        if target_lang in language_list:
+            return language_list.index(target_lang)
+    except (ValueError, TypeError, AttributeError):
+        pass
+    return default
+
+
+def get_language_name(lang_code: str, fallback: str = None) -> str:
+    """
+    Safely get the display name for a language code.
+    
+    Args:
+        lang_code: Language code (e.g., 'en', 'es', 'ca')
+        fallback: Fallback value if language not found (defaults to lang_code.upper())
+        
+    Returns:
+        Language display name, or fallback if not found
+    """
+    if lang_code in LANGUAGE_MAP:
+        return LANGUAGE_MAP[lang_code]['name']
+    return fallback if fallback is not None else lang_code.upper()
+
+
+def get_language_display(lang_code: str, include_flag: bool = True) -> str:
+    """
+    Get formatted language display string with name and optionally flag.
+    
+    Args:
+        lang_code: Language code (e.g., 'en', 'es', 'ca')
+        include_flag: Whether to include flag emoji
+        
+    Returns:
+        Formatted string: "Name 🏳️" or "Name" depending on include_flag
+    """
+    if lang_code in LANGUAGE_MAP:
+        lang_info = LANGUAGE_MAP[lang_code]
+        if include_flag:
+            return f"{lang_info['name']} {lang_info['flag']}"
+        return lang_info['name']
+    return lang_code.upper()
+
+
+def format_provider_name(provider: str) -> str:
+    """
+    Format provider name for display (capitalize first letter).
+    
+    Args:
+        provider: Provider name (e.g., 'ollama', 'openai')
+        
+    Returns:
+        Capitalized provider name
+    """
+    return provider.title()
+
+
+def get_model_index(model_list: list, target_model: str, default: int = 0) -> int:
+    """
+    Safely get the index of a model in a list.
+    
+    Args:
+        model_list: List of model names
+        target_model: Model name to find
+        default: Default index to return if not found
+        
+    Returns:
+        Index of target_model in model_list, or default if not found
+    """
+    try:
+        if target_model in model_list:
+            return model_list.index(target_model)
+    except (ValueError, TypeError, AttributeError):
+        pass
+    return default
+
+
+def get_provider_index(provider_list: list, target_provider: str, default: int = 0) -> int:
+    """
+    Safely get the index of a provider in a list.
+    
+    Args:
+        provider_list: List of provider names
+        target_provider: Provider name to find
+        default: Default index to return if not found
+        
+    Returns:
+        Index of target_provider in provider_list, or default if not found
+    """
+    try:
+        if target_provider in provider_list:
+            return provider_list.index(target_provider)
+    except (ValueError, TypeError, AttributeError):
+        pass
+    return default
+
+
+def format_pos_option(pos_tag: str, pos_options: list) -> str:
+    """
+    Format part-of-speech tag for display.
+    
+    Args:
+        pos_tag: POS tag (e.g., 'NOUN', 'VERB')
+        pos_options: List of (name, tag) tuples
+        
+    Returns:
+        Display name for the POS tag, or the tag itself if not found
+    """
+    for name, tag in pos_options:
+        if tag == pos_tag:
+            return name
+    return pos_tag
+
+
+def create_pos_format_func(pos_options: list):
+    """
+    Create a format function for POS tags.
+    
+    Args:
+        pos_options: List of (name, tag) tuples
+        
+    Returns:
+        Format function that takes a POS tag and returns its display name
+    """
+    def format_func(pos_tag: str) -> str:
+        return format_pos_option(pos_tag, pos_options)
+    return format_func
+
+
+def format_documentation_file(index: int, file_names: list) -> str:
+    """
+    Format documentation file name for display.
+    
+    Args:
+        index: Index in the file_names list
+        file_names: List of file names
+        
+    Returns:
+        File name at the given index
+    """
+    if 0 <= index < len(file_names):
+        return file_names[index]
+    return ""
+
+
+def create_documentation_format_func(file_names: list):
+    """
+    Create a format function for documentation file names.
+    
+    Args:
+        file_names: List of file names
+        
+    Returns:
+        Format function that takes an index and returns the file name
+    """
+    def format_func(index: int) -> str:
+        return format_documentation_file(index, file_names)
+    return format_func
+
+
+def get_centrality_sort_key(item: tuple) -> float:
+    """
+    Get sort key for centrality items (sort by value, descending).
+    
+    Args:
+        item: Tuple of (word, centrality_score)
+        
+    Returns:
+        Centrality score (negated for descending sort)
+    """
+    return -item[1]  # Negate for descending sort
+
+
+def build_model_label(model_type: str, is_available: bool) -> str:
+    """
+    Build label for model selectbox with optional warning indicator.
+    
+    Args:
+        model_type: Type of model (e.g., 'Ollama Model', 'OpenAI Model')
+        is_available: Whether the model is available
+        
+    Returns:
+        Label string with optional warning emoji
+    """
+    warning = "" if is_available else "⚠️"
+    return f"{model_type} {warning}".strip()
+
+
+def is_model_enabled(provider: str, current_provider: str, is_available: bool) -> bool:
+    """
+    Check if model selection should be enabled.
+    
+    Args:
+        provider: Provider type to check ('ollama' or 'openai')
+        current_provider: Current selected provider
+        is_available: Whether model is available
+        
+    Returns:
+        True if model should be enabled, False otherwise
+    """
+    return is_available and current_provider == provider
+
+
+def extract_translation_text(message_content: str) -> tuple[str, str]:
+    """
+    Extract the actual translation text from a message that may contain language labels.
+    
+    Args:
+        message_content: Full message content (e.g., "English 🇬🇧: Hello world")
+        
+    Returns:
+        Tuple of (translation_text, language_label) or (message_content, "") if no label found
+    """
+    # Check if content has language label format: "Language Name 🏳️: translation text"
+    for lang_code in LANGUAGE_MAP.keys():
+        lang_display = get_language_display(lang_code)
+        if f"{lang_display}:" in message_content:
+            # Extract text after the language label
+            parts = message_content.split(f"{lang_display}:", 1)
+            if len(parts) == 2:
+                translation_text = parts[1].strip()
+                return translation_text, lang_display
+    # If no label found, return content as-is
+    return message_content, ""
+
+
+def parse_translation_message(message: dict) -> tuple[str, str, str]:
+    """
+    Parse a translation message to extract translation text, language code, and display name.
+    
+    Args:
+        message: Message dictionary with 'content' and optionally 'target_lang'
+        
+    Returns:
+        Tuple of (translation_text, lang_code, lang_display)
+    """
+    content = message.get("content", "")
+    target_lang = message.get("target_lang")
+    
+    # Extract translation text (remove language label if present)
+    translation_text, lang_display = extract_translation_text(content)
+    
+    # If we don't have target_lang, try to find it from the display name
+    if not target_lang and lang_display:
+        for lang_code, lang_info in LANGUAGE_MAP.items():
+            if lang_display == get_language_display(lang_code):
+                target_lang = lang_code
+                break
+    
+    return translation_text, target_lang or "", lang_display
+
+
 def render_chat_message(message, role, target_lang=None, source_lang="en"):
     """Render a chat message with TTS capability."""
     # Add debug logging to track message rendering
@@ -141,7 +422,7 @@ def render_chat_message(message, role, target_lang=None, source_lang="en"):
                 
         case "assistant" | "ai":
             css_class = "chat-message-ai"
-            prefix = "AI"
+            prefix = "LLM"
             
             # Check if this is a translation message (contains language name + flag)
             is_translation = False
@@ -150,7 +431,7 @@ def render_chat_message(message, role, target_lang=None, source_lang="en"):
                     is_translation = True
                     break
                 
-            # For AI responses, create container with message and TTS button
+            # For LLM responses, create container with message and TTS button
             formatted_content = process_message_content(message)
             
             # Create a unique key for this message using content hash
@@ -242,7 +523,7 @@ def render_chat_message(message, role, target_lang=None, source_lang="en"):
                                     logger.error(f"Error generating audio for {lang_code}: {str(e)}")
                                     st.error(f"Audio error: {str(e)}")
                 else:
-                    st.warning("Audio unavailable - AI model not ready")
+                    st.warning("Audio unavailable - LLM model not ready")
             else:
                 st.markdown(
                     f"""<div class='{css_class}'>
@@ -1064,7 +1345,7 @@ def visualize_translation_graph(graph_data):
     graph_data["edges"] = valid_edges
     
     # Create a network with dark mode friendly colors
-    net = Network(height="600px", width="100%", bgcolor="#0E1117", font_color="#FAFAFA")
+    net = Network(height="400px", width="100%", bgcolor="#0E1117", font_color="#FAFAFA")
     
     # Set options with dark theme colors and improved physics for force-directed layout
     net.barnes_hut()
@@ -1298,7 +1579,7 @@ def visualize_translation_graph(graph_data):
     os.unlink(path)
     
     # Display the enhanced network
-    st.components.v1.html(enhanced_html, height=600)
+    st.components.v1.html(enhanced_html, height=400)
 
 def enhance_graph_html(html_path: str, graph_data: dict) -> str:
     """
@@ -2195,10 +2476,11 @@ def show_language_graphs_help():
             # Create a dropdown to select between multiple files if there are more than one
             if len(md_files) > 1:
                 file_names = [os.path.basename(f).replace('.md', '') for f in md_files]
+                doc_format_func = create_documentation_format_func(file_names)
                 selected_index = st.selectbox(
                     "Select documentation:",
                     range(len(file_names)),
-                    format_func=lambda i: file_names[i]
+                    format_func=doc_format_func
                 )
                 selected_file = md_files[selected_index]
             else:
@@ -2417,7 +2699,7 @@ def display_word_analysis(word: str, language: str, analysis_data: dict):
     
     # Enhanced LLM analysis
     if any(key in analysis_data for key in ["infinitive", "conjugations", "gender", "examples", "synonyms"]):
-        st.markdown("### 🧠 AI-Enhanced Analysis")
+        st.markdown("### 🧠 LLM-Enhanced Analysis")
         
         # Handle different parts of speech
         if analysis_data.get("pos") == "VERB":
@@ -2648,6 +2930,8 @@ def main():
         st.session_state["current_word"] = None
     if "current_word_lang" not in st.session_state:
         st.session_state["current_word_lang"] = None
+    if "help_dismissed" not in st.session_state:
+        st.session_state["help_dismissed"] = False
     
     # Initialize graph storage
     if "graph_storage" not in st.session_state:
@@ -2756,43 +3040,95 @@ def main():
         # Add a visual separator
         st.markdown("<hr>", unsafe_allow_html=True)
         
-        # LLM Provider selection
-        st.subheader("LLM Provider")
-        provider_options = ["ollama", "openai"]
-        selected_provider = st.selectbox(
-            "AI Provider",
-            provider_options,
-            index=provider_options.index(st.session_state["llm_provider"]) if st.session_state["llm_provider"] in provider_options else 0,
-            format_func=lambda x: x.title(),  # Capitalize for display
-            help="Select the AI provider to use for translation"
+        # Language selection - KEEP VISIBLE (priority)
+        st.header("Language Settings")
+        source_lang = st.selectbox(
+            "Source Language",
+            settings.supported_languages_list,
+            index=get_language_index(settings.supported_languages_list, settings.default_source_language),
+            format_func=format_language_option,
+            help="Select the source language"
         )
         
-        # Show provider-specific options
-        if selected_provider == "ollama":
-            # Use cached available models to prevent repeated API calls
-            if "cached_available_models" not in st.session_state:
-                st.session_state["cached_available_models"] = get_available_models() if st.session_state["llm_provider"] == "ollama" else ["llama3.2:latest"]
-            available_models = st.session_state["cached_available_models"]
-            model_name = st.selectbox(
-                f"Ollama Model {'' if st.session_state['model_available'] and st.session_state['llm_provider'] == 'ollama' else '⚠️'}",
-                available_models,
-                index=available_models.index(st.session_state["model_name"]) if st.session_state["model_name"] in available_models else 0,
-                help="Select the Ollama model to use for translation",
-                disabled=not (st.session_state["model_available"] and st.session_state["llm_provider"] == "ollama")
+        # Multiple target languages selection
+        target_langs = st.multiselect(
+            "Target Languages",
+            settings.supported_languages_list,
+            default=settings.default_target_languages_list,
+            format_func=format_language_option,
+            help="Select one or more target languages"
+        )
+        
+        # Ensure at least one target language is selected
+        if not target_langs:
+            st.warning("Please select at least one target language")
+            # Use first available default target language, or first supported language as fallback
+            if settings.default_target_languages_list:
+                target_langs = [settings.default_target_languages_list[0]]
+            elif settings.supported_languages_list:
+                target_langs = [settings.supported_languages_list[0]]
+            else:
+                target_langs = []
+        
+        # Model availability status
+        if not st.session_state["model_available"]:
+            st.error("⚠️ Selected model is not available. LLM features are disabled.")
+        else:
+            st.success("✅ LLM model is ready to use")
+        
+        # LLM Settings - Move to collapsible expander
+        with st.expander("⚙️ LLM Settings", expanded=False):
+            # LLM Provider selection
+            st.subheader("LLM Provider")
+            provider_options = ["ollama", "openai"]
+            provider_index = get_provider_index(
+                provider_options, 
+                st.session_state["llm_provider"]
             )
-        elif selected_provider == "openai":
-            # Dynamically fetch available OpenAI models instead of using hardcoded list
-            openai_models = get_openai_available_models(
-                st.session_state.get("openai_api_key", settings.openai_api_key),
-                st.session_state.get("openai_organization", settings.openai_organization)
+            selected_provider = st.selectbox(
+                "LLM Provider",
+                provider_options,
+                index=provider_index,
+                format_func=format_provider_name,
+                help="Select the LLM provider to use for translation"
             )
-            model_name = st.selectbox(
-                f"OpenAI Model {'' if st.session_state['model_available'] and st.session_state['llm_provider'] == 'openai' else '⚠️'}",
-                openai_models,
-                index=openai_models.index(st.session_state["model_name"]) if st.session_state["model_name"] in openai_models else 0,
-                help="Select the OpenAI model to use for translation",
-                disabled=not (st.session_state["model_available"] and st.session_state["llm_provider"] == "openai")
-            )
+            
+            # Show provider-specific options
+            if selected_provider == "ollama":
+                # Use cached available models to prevent repeated API calls
+                if "cached_available_models" not in st.session_state:
+                    st.session_state["cached_available_models"] = get_available_models() if st.session_state["llm_provider"] == "ollama" else ["llama3.2:latest"]
+                available_models = st.session_state["cached_available_models"]
+                is_ollama_available = st.session_state['model_available'] and st.session_state['llm_provider'] == 'ollama'
+                model_label = build_model_label("Ollama Model", is_ollama_available)
+                model_index = get_model_index(available_models, st.session_state["model_name"])
+                is_disabled = not is_model_enabled("ollama", st.session_state["llm_provider"], st.session_state["model_available"])
+                
+                model_name = st.selectbox(
+                    model_label,
+                    available_models,
+                    index=model_index,
+                    help="Select the Ollama model to use for translation",
+                    disabled=is_disabled
+                )
+            elif selected_provider == "openai":
+                # Dynamically fetch available OpenAI models instead of using hardcoded list
+                openai_models = get_openai_available_models(
+                    st.session_state.get("openai_api_key", settings.openai_api_key),
+                    st.session_state.get("openai_organization", settings.openai_organization)
+                )
+                is_openai_available = st.session_state['model_available'] and st.session_state['llm_provider'] == 'openai'
+                model_label = build_model_label("OpenAI Model", is_openai_available)
+                model_index = get_model_index(openai_models, st.session_state["model_name"])
+                is_disabled = not is_model_enabled("openai", st.session_state["llm_provider"], st.session_state["model_available"])
+                
+                model_name = st.selectbox(
+                    model_label,
+                    openai_models,
+                    index=model_index,
+                    help="Select the OpenAI model to use for translation",
+                    disabled=is_disabled
+                )
             
             # Show API key input if OpenAI is selected
             openai_api_key = st.text_input(
@@ -2858,39 +3194,10 @@ def main():
             st.session_state["model_available"] = False
             st.rerun()
         
-        # Language selection
-        st.header("Language Settings")
-        source_lang = st.selectbox(
-            "Source Language",
-            settings.supported_languages_list,
-            index=settings.supported_languages_list.index(settings.default_source_language) if settings.default_source_language in settings.supported_languages_list else 0,
-            format_func=lambda x: f"{LANGUAGE_MAP[x]['name']} {LANGUAGE_MAP[x]['flag']}",
-            help="Select the source language"
-        )
-        
-        # Multiple target languages selection
-        target_langs = st.multiselect(
-            "Target Languages",
-            settings.supported_languages_list,
-            default=settings.default_target_languages_list,
-            format_func=lambda x: f"{LANGUAGE_MAP[x]['name']} {LANGUAGE_MAP[x]['flag']}",
-            help="Select one or more target languages"
-        )
-        
-        # Ensure at least one target language is selected
-        if not target_langs:
-            st.warning("Please select at least one target language")
-            target_langs = settings.default_target_languages_list[:1]  # Use first default target language
-        
-        # Model availability status
-        if not st.session_state["model_available"]:
-            st.error("⚠️ Selected model is not available. AI features are disabled.")
-            st.info("Check the model status above and make sure it's properly installed.")
-        else:
-            st.success("✅ AI model is ready to use")
-            
+        # Graph Options - Move to collapsible expander
+        with st.expander("📊 Graph Options", expanded=False):
         # Switch for visualization type
-        st.header("Visualization Settings")
+            st.subheader("Visualization Settings")
         view_options = ["Semantic Graph", "Co-occurrence Network"]
         selected_view = st.radio("Analysis View", view_options)
         
@@ -2929,98 +3236,100 @@ def main():
                 ("Adverbs", "ADV"),
                 ("Proper Nouns", "PROPN")
             ]
+            pos_tag_options = [tag for _, tag in pos_options]
+            pos_format_func = create_pos_format_func(pos_options)
             selected_pos = st.multiselect(
                 "Part of Speech Filter",
-                options=[tag for _, tag in pos_options],
+                options=pos_tag_options,
                 default=settings.default_pos_filter_list,
-                format_func=lambda x: next((name for name, tag in pos_options if tag == x), x),
+                format_func=pos_format_func,
                 help="Filter words by part of speech"
             )
             st.session_state["selected_pos"] = selected_pos
         
-        # Debug toggle
+        # Graph History Section - Move to collapsible expander
+        with st.expander("📈 Graph History", expanded=False):
+            # Show recent graphs
+            try:
+                history = st.session_state.graph_storage.get_graph_history(limit=10)
+                
+                if history:
+                    for graph in history:
+                        # Create a compact display for each graph
+                        with st.expander(f"📈 {graph['source_text'][:40]}...", expanded=False):
+                            st.write(f"**Languages:** {', '.join(graph['target_languages'])}")
+                            st.write(f"**Nodes:** {graph['node_count']}, **Edges:** {graph['edge_count']}")
+                            st.write(f"**Created:** {graph['created_at'][:16]}")
+                            
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                if st.button("🔄 Load", key=f"load_{graph['id']}"):
+                                    # Load and display historical graph
+                                    loaded_graph = st.session_state.graph_storage.get_graph(graph['id'])
+                                    if loaded_graph:
+                                        st.session_state["current_graph_data"] = {
+                                            "nodes": loaded_graph["nodes"],
+                                            "edges": loaded_graph["edges"]
+                                        }
+                                        st.session_state["current_graph_id"] = graph['id']
+                                        st.rerun()
+                            
+                            with col2:
+                                if st.button("🗑️ Delete", key=f"delete_{graph['id']}"):
+                                    if st.session_state.graph_storage.delete_graph(graph['id']):
+                                        st.success("Graph deleted!")
+                                        st.rerun()
+                else:
+                    st.info("No graphs saved yet. Generate your first graph to see it here!")
+            except Exception as e:
+                st.error(f"Error loading graph history: {e}")
+                logger.error(f"Error loading graph history: {e}")
+            
+            # Add search functionality
+            st.subheader("🔍 Search Graphs")
+            search_query = st.text_input("Search by text content", placeholder="Enter text to search...", key="graph_search")
+            
+            if search_query:
+                try:
+                    search_results = st.session_state.graph_storage.search_graphs_by_text(search_query, limit=5)
+                    if search_results:
+                        st.write(f"Found {len(search_results)} matching graphs:")
+                        for result in search_results:
+                            st.write(f"• {result['source_text'][:50]}...")
+                    else:
+                        st.info("No matching graphs found.")
+                except Exception as e:
+                    st.error(f"Error searching graphs: {e}")
+                    logger.error(f"Error searching graphs: {e}")
+            
+            # Show storage statistics
+            st.subheader("📊 Storage Info")
+            try:
+                stats = st.session_state.graph_storage.get_graph_statistics()
+                st.write(f"**Total Graphs:** {stats['total_graphs']}")
+                st.write(f"**Total Nodes:** {stats['total_nodes']}")
+                st.write(f"**Storage Size:** {stats['storage_size_mb']} MB")
+            except Exception as e:
+                st.error(f"Error loading storage stats: {e}")
+                logger.error(f"Error loading storage stats: {e}")
+            
+            if st.button("🗑️ Clear All Data", key="clear_all_graphs"):
+                if st.confirm("Are you sure you want to delete all saved graphs?"):
+                    try:
+                        if st.session_state.graph_storage.clear_all_data():
+                            st.success("All data cleared!")
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"Error clearing data: {e}")
+                        logger.error(f"Error clearing data: {e}")
+        
+        # Debug toggle - Move to collapsible expander
+        with st.expander("🐛 Debug", expanded=False):
             st.session_state["show_debug"] = st.checkbox(
                 "Show Debug Logs", 
                 value=st.session_state["show_debug"],
-            help="Show detailed logs of translation processing"
+                help="Show detailed logs of translation processing"
             )
-        
-        # Graph History Section
-        st.header("📊 Graph History")
-        
-        # Show recent graphs
-        try:
-            history = st.session_state.graph_storage.get_graph_history(limit=10)
-            
-            if history:
-                for graph in history:
-                    # Create a compact display for each graph
-                    with st.expander(f"📈 {graph['source_text'][:40]}...", expanded=False):
-                        st.write(f"**Languages:** {', '.join(graph['target_languages'])}")
-                        st.write(f"**Nodes:** {graph['node_count']}, **Edges:** {graph['edge_count']}")
-                        st.write(f"**Created:** {graph['created_at'][:16]}")
-                        
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            if st.button("🔄 Load", key=f"load_{graph['id']}"):
-                                # Load and display historical graph
-                                loaded_graph = st.session_state.graph_storage.get_graph(graph['id'])
-                                if loaded_graph:
-                                    st.session_state["current_graph_data"] = {
-                                        "nodes": loaded_graph["nodes"],
-                                        "edges": loaded_graph["edges"]
-                                    }
-                                    st.session_state["current_graph_id"] = graph['id']
-                                    st.rerun()
-                        
-                        with col2:
-                            if st.button("🗑️ Delete", key=f"delete_{graph['id']}"):
-                                if st.session_state.graph_storage.delete_graph(graph['id']):
-                                    st.success("Graph deleted!")
-                                    st.rerun()
-            else:
-                st.info("No graphs saved yet. Generate your first graph to see it here!")
-        except Exception as e:
-            st.error(f"Error loading graph history: {e}")
-            logger.error(f"Error loading graph history: {e}")
-        
-        # Add search functionality
-        st.subheader("🔍 Search Graphs")
-        search_query = st.text_input("Search by text content", placeholder="Enter text to search...", key="graph_search")
-        
-        if search_query:
-            try:
-                search_results = st.session_state.graph_storage.search_graphs_by_text(search_query, limit=5)
-                if search_results:
-                    st.write(f"Found {len(search_results)} matching graphs:")
-                    for result in search_results:
-                        st.write(f"• {result['source_text'][:50]}...")
-                else:
-                    st.info("No matching graphs found.")
-            except Exception as e:
-                st.error(f"Error searching graphs: {e}")
-                logger.error(f"Error searching graphs: {e}")
-        
-        # Show storage statistics
-        st.subheader("📊 Storage Info")
-        try:
-            stats = st.session_state.graph_storage.get_graph_statistics()
-            st.write(f"**Total Graphs:** {stats['total_graphs']}")
-            st.write(f"**Total Nodes:** {stats['total_nodes']}")
-            st.write(f"**Storage Size:** {stats['storage_size_mb']} MB")
-        except Exception as e:
-            st.error(f"Error loading storage stats: {e}")
-            logger.error(f"Error loading storage stats: {e}")
-        
-        if st.button("🗑️ Clear All Data", key="clear_all_graphs"):
-            if st.confirm("Are you sure you want to delete all saved graphs?"):
-                try:
-                    if st.session_state.graph_storage.clear_all_data():
-                        st.success("All data cleared!")
-                        st.rerun()
-                except Exception as e:
-                    st.error(f"Error clearing data: {e}")
-                    logger.error(f"Error clearing data: {e}")
     
     # Show debug logs if enabled
     if st.session_state["show_debug"]:
@@ -3036,27 +3345,234 @@ def main():
                 clear_logs()
                 st.rerun()
     
-    # Create a two-column layout for the main content area
-    main_col, chat_col = st.columns([3, 2])
+    # Display a helpful guide if no translation has been made yet (collapsible and dismissible)
+    if not st.session_state["help_dismissed"] and not st.session_state["chat_history"]:
+        with st.expander("ℹ️ How to use the Translation Helper", expanded=False):
+            st.markdown(f"""
+            1. Select source language in the sidebar
+            2. Select one or more target languages in the sidebar
+            3. Type your text in the input box
+            4. Click "Translate" to see the translations
+            5. Explore the word relationships in either the semantic graph or co-occurrence network views
+            
+            **Example**: Try translating "Do you know my country?" from {get_language_name("en")} to both {get_language_name("es")} and {get_language_name("ca")}
+            """)
+            if st.button("Dismiss", key="dismiss_help"):
+                st.session_state["help_dismissed"] = True
+                st.rerun()
+    
+    # Translation input/output section - side by side (50/50)
+    st.subheader("💬 Translation")
+    
+    # Create main content area with collapsible right sidebar
+    main_col, chat_sidebar_col = st.columns([2, 1])
     
     with main_col:
-        # Show the visualization based on the selected view
-        if st.session_state["current_view"] == "semantic" and st.session_state["graph_data"]:
-            # Add header for the graph
-            st.subheader("📊 Semantic Network Analysis")
+        input_col, output_col = st.columns([1, 1])
+        
+        with input_col:
+            st.markdown("**Input**")
+            # Translation input
+            source_text = st.text_area(
+                f"Enter text in {get_language_name(source_lang)}:",
+                height=200,
+                placeholder=f"Type your text in {get_language_name(source_lang)} here...",
+                disabled=not st.session_state["model_available"],
+                label_visibility="collapsed"
+            )
             
-            # Interactive Word Analysis Section
-            st.markdown("### 🔍 Interactive Word Analysis")
-            st.markdown("**Click on any word in the graph below to see detailed linguistic analysis!**")
-            st.info("💡 **Tip**: Hover over nodes to see basic info, click to get full AI-powered analysis.")
+            btn_col1, btn_col2 = st.columns([1, 1])
             
-            # Display controls for the graph
-            with st.expander("Graph Options", expanded=False):
-                # Add option to choose which languages to display
-                available_langs = list(st.session_state["graph_data"].keys())
+            with btn_col1:
+                # Create button text based on number of target languages
+                if len(target_langs) == 1:
+                    button_text = f"🔄 Translate to {get_language_name(target_langs[0])}"
+                else:
+                    button_text = f"🔄 Translate to {len(target_langs)} languages"
+                    
+                translate_button = st.button(
+                    button_text, 
+                    use_container_width=True,
+                    disabled=not st.session_state["model_available"] or not source_text
+                )
+            
+            with btn_col2:
+                clear_button = st.button("🗑️ Clear History", use_container_width=True)
+                if clear_button:
+                    st.session_state["chat_history"] = []
+                    st.session_state["translations"] = {}
+                    st.session_state["graph_data"] = None
+                    st.session_state["cooccurrence_graphs"] = {}
+                    st.success("History cleared!")
+                    st.rerun()
+        
+        with output_col:
+            # Google Translate-style translation output
+            st.markdown("**Translation**")
+            
+            # Get the most recent translation results from chat history
+            if st.session_state["chat_history"]:
+                # Find the most recent assistant messages (translations)
+                recent_translations = []
+                for i in range(len(st.session_state["chat_history"]) - 1, -1, -1):
+                    message = st.session_state["chat_history"][i]
+                    if message["role"] == "assistant":
+                        recent_translations.insert(0, message)
+                        # Stop when we find a user message (start of a new translation request)
+                        if i > 0 and st.session_state["chat_history"][i-1]["role"] == "user":
+                            break
                 
-                # Create columns for options
-                opt_col1, opt_col2 = st.columns([1, 1])
+                # Display translations in Google Translate style
+                if recent_translations:
+                    # Parse all translations
+                    parsed_translations = []
+                    for message in recent_translations:
+                        trans_text, lang_code, lang_display = parse_translation_message(message)
+                        if trans_text:
+                            parsed_translations.append({
+                                "text": trans_text,
+                                "lang_code": lang_code,
+                                "lang_display": lang_display,
+                                "message": message
+                            })
+                    
+                    if parsed_translations:
+                        # Display each translation cleanly
+                        for idx, trans in enumerate(parsed_translations):
+                            # Language label (subtle, small) - light gray for dark theme
+                            if trans["lang_display"]:
+                                st.markdown(f'<div style="font-size: 0.75em; color: #B0B0B0; margin-bottom: 4px; font-weight: 500;">{html.escape(trans["lang_display"])}</div>', unsafe_allow_html=True)
+                            
+                            # Translation text (large, prominent, Google Translate style) - light text for dark theme
+                            escaped_text = html.escape(trans["text"])
+                            st.markdown(f'''
+                            <div style="font-size: 1.5em; line-height: 1.6; color: #FAFAFA; 
+                                        padding: 12px 0; margin-bottom: 16px; 
+                                        border-bottom: 1px solid #4CC9F0; word-wrap: break-word;">
+                                {escaped_text}
+                            </div>
+                            ''', unsafe_allow_html=True)
+                            
+                            # TTS button (subtle, inline) - only show translation text, not language label
+                            if st.session_state.get("model_available", False) and trans["lang_code"]:
+                                tts_key = f"tts_output_{hash(trans['text'] + trans['lang_code'])}"
+                                # Create a compact button row
+                                tts_col1, tts_col2 = st.columns([1, 20])
+                                with tts_col1:
+                                    if st.button("🔊", key=tts_key, help=f"Play audio in {trans['lang_display'] or trans['lang_code']}", use_container_width=False):
+                                        text_to_speech(trans["text"], trans["lang_code"], tts_key)
+                else:
+                    # Empty state - light text for dark theme
+                    st.markdown('''
+                    <div style="text-align: center; padding: 60px 20px; color: #B0B0B0;">
+                        <div style="font-size: 3em; margin-bottom: 10px;">🌐</div>
+                        <div style="font-size: 1.1em;">Your translations will appear here</div>
+                    </div>
+                    ''', unsafe_allow_html=True)
+            else:
+                # Empty state - light text for dark theme
+                st.markdown('''
+                <div style="text-align: center; padding: 60px 20px; color: #B0B0B0;">
+                    <div style="font-size: 3em; margin-bottom: 10px;">🌐</div>
+                    <div style="font-size: 1.1em;">Your translations will appear here</div>
+                </div>
+                ''', unsafe_allow_html=True)
+    
+    # Right sidebar for chat history (collapsible via expander)
+    with chat_sidebar_col:
+        with st.expander("💬 Chat History", expanded=False):
+            # Create custom CSS for styling the chat
+            st.markdown("""
+            <style>
+            .chat-message-user, .chat-message-ai {
+                margin-bottom: 15px;
+                padding: 10px;
+                border-radius: 5px;
+                font-size: 0.9em;
+            }
+            .chat-message-user {
+                background-color: rgba(67, 97, 238, 0.1);
+                border-left: 3px solid #4361EE;
+            }
+            .chat-message-ai {
+                background-color: rgba(76, 201, 240, 0.1);
+                border-left: 3px solid #4CC9F0;
+            }
+            audio::-webkit-media-controls-panel {
+                background-color: #333333;
+            }
+            audio::-webkit-media-controls-play-button {
+                background-color: #4361EE;
+                border-radius: 50%;
+            }
+            </style>
+            """, unsafe_allow_html=True)
+            
+            # Create a scrollable chat container
+            chat_container = st.container(height=600)
+            
+            with chat_container:
+                # Show existing messages or a placeholder
+                if not st.session_state["chat_history"]:
+                    st.markdown("<p style='color: #666; text-align: center; padding: 20px; font-size: 0.9em;'>Your translation history will appear here</p>", unsafe_allow_html=True)
+                else:
+                    for i, message in enumerate(st.session_state["chat_history"]):
+                        # For LLM responses (translations), use the target language for TTS
+                        message_target_lang = None
+                        if message["role"] == "assistant":
+                            # Check if the message has a target_lang attribute
+                            if "target_lang" in message:
+                                message_target_lang = message["target_lang"]
+                            # Fallback to analyzing the previous message
+                            elif i > 0:
+                                # Get the previous message to find the request details
+                                prev_msg = st.session_state["chat_history"][i-1]
+                                if prev_msg["role"] == "user" and "Translate" in prev_msg["content"]:
+                                    # This is a translation response, extract the target language
+                                    prev_content = prev_msg["content"]
+                                    
+                                    # Use match to check for target language in previous message
+                                    pattern = "to (.*?):"
+                                    match_result = re.search(pattern, prev_content)
+                                    if match_result:
+                                        target_text = match_result.group(1).strip()
+                                        
+                                        match target_text:
+                                            case text if "Spanish" in text:
+                                                message_target_lang = "es"
+                                            case text if "English" in text:
+                                                message_target_lang = "en"
+                                            case text if "Catalan" in text:
+                                                message_target_lang = "ca"
+                                            case _:
+                                                message_target_lang = None
+                        
+                        render_chat_message(message["content"], message["role"], message_target_lang, source_lang)
+    
+    # Graph visualization section - moved to tabs
+    if st.session_state["graph_data"] or st.session_state.get("cooccurrence_graphs"):
+        # Create tabs for different views
+        tab1, tab2 = st.tabs(["📊 Semantic Graph", "📈 Co-occurrence Network"])
+        
+        with tab1:
+            # Show the visualization based on the selected view
+            if st.session_state["graph_data"]:
+                # Add header for the graph
+                st.subheader("📊 Semantic Network Analysis")
+                
+                # Interactive Word Analysis Section
+                st.markdown("### 🔍 Interactive Word Analysis")
+                st.markdown("**Click on any word in the graph below to see detailed linguistic analysis!**")
+                st.info("💡 **Tip**: Hover over nodes to see basic info, click to get full LLM-powered analysis.")
+                
+                # Display controls for the graph
+                available_langs = list(st.session_state["graph_data"].keys())
+                merge_graphs = True  # Default to merged view
+                min_strength = 0.5  # Default strength
+                
+                with st.expander("Graph Options", expanded=False):
+                    # Create columns for options
+                    opt_col1, opt_col2 = st.columns([1, 1])
                 
                 with opt_col1:
                     # Option to merge all graphs into one comprehensive view
@@ -3070,6 +3586,7 @@ def main():
                                            help="Only show strong relationships above this threshold")
             
             # Display the graph based on selection
+                
             if merge_graphs and len(available_langs) > 1:
                 # Create a merged graph with cross-language connections
                 merged_graph = merge_language_graphs(st.session_state["graph_data"])
@@ -3084,9 +3601,11 @@ def main():
                 visualize_translation_graph(merged_graph)
             elif available_langs:
                 # Let user choose which language graph to show
-                selected_lang = st.selectbox("Select language graph", 
+                selected_lang = st.selectbox(
+                    "Select language graph", 
                                            options=available_langs,
-                                           format_func=lambda x: f"{LANGUAGE_MAP[x]['name']} {LANGUAGE_MAP[x]['flag']}")
+                    format_func=format_language_option
+                )
                 
                 # Filter edges by strength if needed
                 graph_data = st.session_state["graph_data"][selected_lang]
@@ -3102,7 +3621,7 @@ def main():
                     graph_data = filtered_graph
                 
                 # Display the selected graph
-                st.markdown(f"**Semantic network for {LANGUAGE_MAP[selected_lang]['name']} {LANGUAGE_MAP[selected_lang]['flag']}**")
+                st.markdown(f"**Semantic network for {get_language_display(selected_lang)}**")
                 visualize_translation_graph(graph_data)
                 
             # Debug section for troubleshooting
@@ -3173,7 +3692,7 @@ def main():
                 # Analyze button
                 if st.button("🔍 Analyze Selected Word", type="primary"):
                     if st.session_state.get("model_available", False):
-                        with st.spinner(f"Analyzing '{word}' using AI..."):
+                        with st.spinner(f"Analyzing '{word}' using LLM..."):
                             # Get the LLM client
                             api_key = None
                             organization = None
@@ -3203,7 +3722,7 @@ def main():
                             finally:
                                 loop.close()
                     else:
-                        st.error("⚠️ AI model not available. Please check the model status above.")
+                        st.error("⚠️ LLM model not available. Please check the model status above.")
                 
                 # Display analysis if available
                 if "current_word_analysis" in st.session_state and st.session_state.get("current_word") == word:
@@ -3220,27 +3739,30 @@ def main():
                     if "current_word_analysis" in st.session_state:
                         del st.session_state["current_word_analysis"]
                     st.rerun()
+                else:
+                    st.info("💡 **Click on any word in the graph above to select it for analysis.**")
             else:
-                st.info("💡 **Click on any word in the graph above to select it for analysis.**")
+                st.info("No graph data available yet. Translate some text to generate graphs.")
         
-        # Show co-occurrence networks if that view is selected 
-        elif st.session_state["current_view"] == "cooccurrence" and "cooccurrence_graphs" in st.session_state and st.session_state["cooccurrence_graphs"]:
-            # Add header for the co-occurrence network
-            st.subheader("📊 Word Co-occurrence Network")
-            
-            available_langs = list(st.session_state["cooccurrence_graphs"].keys())
-            
-            # Let user choose which language graph to show
-            if available_langs:
-                selected_lang = st.selectbox(
-                    "Select language", 
-                    options=available_langs,
-                    format_func=lambda x: f"{LANGUAGE_MAP[x]['name']} {LANGUAGE_MAP[x]['flag']}"
-                )
+        with tab2:
+            # Show co-occurrence networks
+            if st.session_state.get("cooccurrence_graphs"):
+                # Add header for the co-occurrence network
+                st.subheader("📊 Word Co-occurrence Network")
+                
+                available_langs = list(st.session_state["cooccurrence_graphs"].keys())
+                
+                # Let user choose which language graph to show
+                if available_langs:
+                    selected_lang = st.selectbox(
+                        "Select language", 
+                        options=available_langs,
+                        format_func=format_language_option
+                    )
                 
                 # Show information about this analysis
                 st.markdown(f"""
-                Showing word co-occurrence network for **{LANGUAGE_MAP[selected_lang]['name']} {LANGUAGE_MAP[selected_lang]['flag']}**
+                Showing word co-occurrence network for **{get_language_display(selected_lang)}**
                 
                 * Nodes represent individual words
                 * Larger nodes appear more frequently
@@ -3251,7 +3773,7 @@ def main():
                 # Display the co-occurrence network
                 graph = st.session_state["cooccurrence_graphs"][selected_lang]
                 html_string = visualize_cooccurrence_network(graph, selected_lang)
-                st.components.v1.html(html_string, height=610)
+                st.components.v1.html(html_string, height=400)
                 
                 # Show network stats
                 import networkx as nx
@@ -3276,8 +3798,8 @@ def main():
                     betweenness_cent = nx.betweenness_centrality(graph)
                     
                     # Get top words by degree centrality
-                    top_degree = sorted(degree_cent.items(), key=lambda x: x[1], reverse=True)[:10]
-                    top_betweenness = sorted(betweenness_cent.items(), key=lambda x: x[1], reverse=True)[:10]
+                    top_degree = sorted(degree_cent.items(), key=get_centrality_sort_key)[:10]
+                    top_betweenness = sorted(betweenness_cent.items(), key=get_centrality_sort_key)[:10]
                     
                     cent_cols = st.columns(2)
                     with cent_cols[0]:
@@ -3289,152 +3811,19 @@ def main():
                         st.markdown("**Bridge Words**")
                         for word, score in top_betweenness:
                             st.markdown(f"• **{word}** ({score:.3f})")
-                
-        # Show placeholder if no data available
-        elif not st.session_state["graph_data"] and not st.session_state.get("cooccurrence_graphs"):
-            st.info("No graph data available yet. Translate some text to generate graphs.")
-            
-        # Display a helpful guide if no translation has been made yet
-        if not st.session_state["chat_history"]:
-            st.info(f"""
-            ### How to use the Translation Helper
-            1. Select source language in the sidebar
-            2. Select one or more target languages in the sidebar
-            3. Type your text in the input box
-            4. Click "Translate" to see the translations
-            5. Explore the word relationships in either the semantic graph or co-occurrence network views
-            
-            **Example**: Try translating "Do you know my country?" from {LANGUAGE_MAP["en"]["name"]} to both {LANGUAGE_MAP["es"]["name"]} and {LANGUAGE_MAP["ca"]["name"]}
-            """)
-        
-        # Translation input section below the graph
-        st.subheader("💬 Translation Input")
-        
-        # Translation input
-        source_text = st.text_area(
-            f"Enter text in {LANGUAGE_MAP[source_lang]['name']}:",
-            height=100,
-            placeholder=f"Type your text in {LANGUAGE_MAP[source_lang]['name']} here...",
-            disabled=not st.session_state["model_available"]
-        )
-        
-        btn_col1, btn_col2 = st.columns([1, 1])
-        
-        with btn_col1:
-            # Create button text based on number of target languages
-            if len(target_langs) == 1:
-                button_text = f"🔄 Translate to {LANGUAGE_MAP[target_langs[0]]['name']}"
             else:
-                button_text = f"🔄 Translate to {len(target_langs)} languages"
-                
-            translate_button = st.button(
-                button_text, 
-                use_container_width=True,
-                disabled=not st.session_state["model_available"] or not source_text
-            )
-        
-        with btn_col2:
-            clear_button = st.button("🗑️ Clear History", use_container_width=True)
-            if clear_button:
-                st.session_state["chat_history"] = []
-                st.session_state["translations"] = {}
-                st.session_state["graph_data"] = None
-                st.session_state["cooccurrence_graphs"] = {}
-                st.success("History cleared!")
-                st.rerun()
-    
-    # Chat history on the right
-    with chat_col:
-        st.subheader("💬 Translation Chat")
-        
-        # Create custom CSS for styling the chat
-        st.markdown("""
-        <style>
-        .chat-message-user, .chat-message-ai {
-            margin-bottom: 15px;
-            padding: 10px;
-            border-radius: 5px;
-        }
-        .chat-message-user {
-            background-color: rgba(67, 97, 238, 0.1);
-            border-left: 3px solid #4361EE;
-        }
-        .chat-message-ai {
-            background-color: rgba(76, 201, 240, 0.1);
-            border-left: 3px solid #4CC9F0;
-        }
-        .stChatContainer {
-            height: 500px;
-            overflow-y: auto;
-            border: 1px solid #4361EE;
-            border-radius: 10px;
-            padding: 15px;
-            background-color: #1E1E1E;
-        }
-        audio::-webkit-media-controls-panel {
-            background-color: #333333;
-        }
-        audio::-webkit-media-controls-play-button {
-            background-color: #4361EE;
-            border-radius: 50%;
-        }
-        </style>
-        """, unsafe_allow_html=True)
-        
-        # Create a scrollable chat container with fixed height
-        chat_container = st.container(height=500)
-        
-        with chat_container:
-            # Add instructions at the top
-            st.info("Scroll to view translation history.")
-            
-            # Show existing messages or a placeholder
-            if not st.session_state["chat_history"]:
-                st.markdown("<p style='color: #666; text-align: center; padding: 20px;'>Your translation history will appear here</p>", unsafe_allow_html=True)
-            else:
-                for i, message in enumerate(st.session_state["chat_history"]):
-                    # For AI responses (translations), use the target language for TTS
-                    message_target_lang = None
-                    if message["role"] == "assistant":
-                        # Check if the message has a target_lang attribute
-                        if "target_lang" in message:
-                            message_target_lang = message["target_lang"]
-                        # Fallback to analyzing the previous message
-                        elif i > 0:
-                            # Get the previous message to find the request details
-                            prev_msg = st.session_state["chat_history"][i-1]
-                            if prev_msg["role"] == "user" and "Translate" in prev_msg["content"]:
-                                # This is a translation response, extract the target language
-                                prev_content = prev_msg["content"]
-                                
-                                # Use match to check for target language in previous message
-                                pattern = "to (.*?):"
-                                match_result = re.search(pattern, prev_content)
-                                if match_result:
-                                    target_text = match_result.group(1).strip()
-                                    
-                                    match target_text:
-                                        case text if "Spanish" in text:
-                                            message_target_lang = "es"
-                                        case text if "English" in text:
-                                            message_target_lang = "en"
-                                        case text if "Catalan" in text:
-                                            message_target_lang = "ca"
-                                        case _:
-                                            message_target_lang = None
-                            
-                    render_chat_message(message["content"], message["role"], message_target_lang, source_lang)
+                st.info("No co-occurrence data available yet. Translate some text to generate graphs.")
 
     # Handle translation
     if translate_button and source_text and st.session_state["model_available"]:
         # Add user input to chat history
         target_lang_names = ", ".join([
-            LANGUAGE_MAP[lang]['name'] for lang in target_langs
+            get_language_name(lang) for lang in target_langs
         ])
         
         st.session_state["chat_history"].append({
             "role": "user", 
-            "content": f"Translate from {LANGUAGE_MAP[source_lang]['name']} to {target_lang_names}:\n\n{source_text}"
+            "content": f"Translate from {get_language_name(source_lang)} to {target_lang_names}:\n\n{source_text}"
         })
         
         # Perform the translations
@@ -3501,7 +3890,7 @@ def main():
                             successful_translations["es"], successful_translations["ca"] = successful_translations["ca"], successful_translations["es"]
                     
                     # Add each translation as a separate message
-                    translation_content = f"{LANGUAGE_MAP[target_lang]['name']} {LANGUAGE_MAP[target_lang]['flag']}: {translation.strip()}"
+                    translation_content = f"{get_language_display(target_lang)}: {translation.strip()}"
                     st.session_state["chat_history"].append({
                         "role": "assistant",
                         "content": translation_content,
