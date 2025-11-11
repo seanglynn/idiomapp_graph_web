@@ -1033,7 +1033,27 @@ else:
 - **Searchability**: Find specific graphs by content or language
 - **Management**: Easy cleanup and organization of stored data
 
-## Current Status: Production Ready with Graph Storage ✅
+## 2025-11-11 - UX Redesign: Simplified Interface & Translation-First Design ✅
+
+### **Changes**
+- **Sidebar**: Moved LLM settings, graph options, history, and debug into collapsible expanders. Only language settings visible by default.
+- **Layout**: Side-by-side translation input/output (50/50) at top, graph tabs below, chat history in collapsible right sidebar.
+- **Translation Output**: Clean display with large text (#FAFAFA), subtle language labels, theme accent borders.
+- **Terminology**: Changed all "AI" references to "LLM" in UI.
+- **Colors**: Fixed dark theme contrast - light text on dark background.
+
+### **Code Improvements**
+- Created reusable helper functions: `format_language_option()`, `get_language_index()`, `extract_translation_text()`, `parse_translation_message()`
+- Replaced inline lambdas in Streamlit components with named functions
+- Added proper error handling for index lookups
+
+### **Result**
+- Cleaner initial UI (2-3 visible sidebar elements vs 15+)
+- Translation functionality prioritized
+- Better space utilization with side-by-side layout
+- Readable text on dark theme
+
+## Current Status: Production Ready with Graph Storage & Modern UX ✅
 
 The application now provides:
 - **Secure API key management**
@@ -1046,6 +1066,10 @@ The application now provides:
 - **Comprehensive language learning features**
 - **Persistent graph storage and management**
 - **Graph history and search capabilities**
+- **Simplified, translation-first user interface**
+- **Google Translate-style output display**
+- **Collapsible advanced features**
+- **Optimized dark theme support**
 
 ## Next Steps (Future Enhancements)
 - **Additional Language Support**: Expand beyond EN/ES/CA
@@ -1054,3 +1078,5 @@ The application now provides:
 - **User Management**: Multi-user support, preferences, and learning progress tracking
 - **API Endpoints**: RESTful API for external integrations and mobile apps
 - **Advanced Analytics**: Learning progress tracking and vocabulary building insights
+- **Mobile Responsive Design**: Optimize layout for smaller screens
+- **Accessibility Improvements**: Screen reader support, keyboard navigation
