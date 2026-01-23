@@ -696,29 +696,18 @@ async def translate_text(client, source_text, source_lang, target_lang):
     source_name = LANGUAGE_MAP[source_lang]['name']
     target_name = LANGUAGE_MAP[target_lang]['name']
 
-    # Special note for Catalan to ensure proper translation
-    catalan_note = ""
-    if target_lang == "ca":
-        catalan_note = """
-IMPORTANT: Translate to proper Catalan, NOT Spanish. Key differences:
-- Spanish "¿Cómo estás?" → Catalan "Com estàs?"
-- Spanish "gracias" → Catalan "gràcies"
-- Catalan uses apostrophes: l'home, d'aigua
-- Catalan has è and ò accents that don't exist in Spanish"""
-
     # Check if client supports structured JSON output (OpenAI)
     if hasattr(client, 'generate_json'):
-        return await _translate_with_json(client, source_text, source_name, target_name, catalan_note)
+        return await _translate_with_json(client, source_text, source_name, target_name)
     else:
-        return await _translate_with_text(client, source_text, source_name, target_name, catalan_note)
+        return await _translate_with_text(client, source_text, source_name, target_name)
 
 
-async def _translate_with_json(client, source_text, source_name, target_name, catalan_note=""):
+async def _translate_with_json(client, source_text, source_name, target_name):
     """
     Translate using OpenAI's structured JSON output for reliable parsing.
     """
     system_prompt = f"""You are a professional translator. Translate text from {source_name} to {target_name}.
-{catalan_note}
 Return ONLY a JSON object with a single key "translation" containing the translated text.
 Preserve the original formatting (line breaks, punctuation)."""
 
@@ -748,13 +737,12 @@ Return JSON: {{"translation": "your translation here"}}"""
         return f"Error: {str(e)}"
 
 
-async def _translate_with_text(client, source_text, source_name, target_name, catalan_note=""):
+async def _translate_with_text(client, source_text, source_name, target_name):
     """
     Translate using plain text output for non-OpenAI providers (e.g., Ollama).
     Uses XML-like delimiters for reliable parsing.
     """
     system_prompt = f"""You are a professional translator. Translate text from {source_name} to {target_name}.
-{catalan_note}
 Output ONLY the translation wrapped in <translation> tags. No explanations."""
 
     prompt = f"""Translate this text from {source_name} to {target_name}:
