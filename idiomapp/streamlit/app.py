@@ -762,13 +762,15 @@ async def translate_text(client, source_text, source_lang, target_lang):
         
         # If the translation contains multiple paragraphs or explanation, try to extract just the translation
         if "\n\n" in translation:
-            # Try to find the actual translation (usually the shortest paragraph or quoted text)
+            # Try to find the actual translation
             paragraphs = [p.strip() for p in translation.split("\n\n") if p.strip()]
             if paragraphs:
-                # Use the shortest non-empty paragraph that's not just a language marker
+                # Filter out language markers and very short fragments
                 paragraphs = [p for p in paragraphs if len(p) > 3 and not p.startswith("LANG_TAG")]
                 if paragraphs:
-                    translation = min(paragraphs, key=len)
+                    # Use the LONGEST paragraph as it's most likely the full translation
+                    # (short paragraphs are often truncated fragments or explanatory notes)
+                    translation = max(paragraphs, key=len)
         
         logger.info(f"Translation result: {translation}")
         return translation
