@@ -1426,22 +1426,79 @@ Include etymology, usage patterns, idioms, regional variations, and practical le
 Your goal is to give language learners deep insight into how this word works in real {lang_name}."""
     
     try:
+        logger.info(f"Calling LLM for word analysis: {word} ({language})")
         response = await client.generate_text(prompt, system_prompt=system_prompt)
-        
+
+        # Log the raw response for debugging
+        logger.info(f"LLM response length: {len(response) if response else 0}")
+        logger.debug(f"LLM raw response: {response[:500] if response else 'EMPTY'}...")
+
+        if not response or response.strip() == "":
+            logger.warning(f"Empty response from LLM for {word}")
+            return {"llm_error": "Empty response from LLM"}
+
+        # Check if response is an error message
+        if response.startswith("Error:"):
+            logger.warning(f"LLM returned error: {response}")
+            return {"llm_error": response}
+
         # Try to extract JSON from response
         import json
         import re
-        
-        # Find JSON in the response
-        json_match = re.search(r'\{.*\}', response, re.DOTALL)
-        if json_match:
-            json_str = json_match.group(0)
-            enhanced_data = json.loads(json_str)
-            return enhanced_data
-        else:
-            logger.warning(f"Could not extract JSON from LLM response for {word}")
-            return {"llm_analysis": response}
-            
+
+        # Method 1: Try to find JSON block with ```json markers
+        json_block_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', response, re.DOTALL)
+        if json_block_match:
+            json_str = json_block_match.group(1)
+            logger.info(f"Found JSON in code block for {word}")
+            try:
+                enhanced_data = json.loads(json_str)
+                logger.info(f"Successfully parsed JSON with {len(enhanced_data)} fields")
+                return enhanced_data
+            except json.JSONDecodeError as e:
+                logger.warning(f"Failed to parse JSON from code block: {e}")
+
+        # Method 2: Find the outermost JSON object
+        # Count braces to find complete JSON
+        brace_count = 0
+        json_start = -1
+        json_end = -1
+        for i, char in enumerate(response):
+            if char == '{':
+                if brace_count == 0:
+                    json_start = i
+                brace_count += 1
+            elif char == '}':
+                brace_count -= 1
+                if brace_count == 0 and json_start != -1:
+                    json_end = i + 1
+                    break
+
+        if json_start != -1 and json_end != -1:
+            json_str = response[json_start:json_end]
+            logger.info(f"Found JSON object from position {json_start} to {json_end}")
+            try:
+                enhanced_data = json.loads(json_str)
+                logger.info(f"Successfully parsed JSON with {len(enhanced_data)} fields")
+                return enhanced_data
+            except json.JSONDecodeError as e:
+                logger.warning(f"Failed to parse extracted JSON: {e}")
+                # Try to fix common JSON issues
+                # Remove trailing commas before } or ]
+                fixed_json = re.sub(r',\s*([}\]])', r'\1', json_str)
+                # Fix single quotes to double quotes
+                fixed_json = fixed_json.replace("'", '"')
+                try:
+                    enhanced_data = json.loads(fixed_json)
+                    logger.info(f"Successfully parsed fixed JSON with {len(enhanced_data)} fields")
+                    return enhanced_data
+                except json.JSONDecodeError as e2:
+                    logger.warning(f"Failed to parse fixed JSON: {e2}")
+
+        # Method 3: Fallback - return raw response for display
+        logger.warning(f"Could not extract JSON from LLM response for {word}, returning raw text")
+        return {"llm_raw_analysis": response}
+
     except Exception as e:
-        logger.error(f"LLM analysis failed for {word}: {e}")
+        logger.error(f"LLM analysis failed for {word}: {e}", exc_info=True)
         return {"llm_error": str(e)} 

@@ -2948,9 +2948,272 @@ def display_word_analysis(word: str, language: str, analysis_data: dict):
         if "grammar_notes" in analysis_data:
             st.info(f"📖 **Grammar Notes:** {analysis_data['grammar_notes']}")
 
+    # Handle LLM errors or raw analysis fallback
+    if "llm_error" in analysis_data:
+        st.warning(f"⚠️ **LLM Analysis Error:** {analysis_data['llm_error']}")
+        st.info("The analysis above shows basic linguistic data from spaCy. For richer analysis, please check your LLM configuration.")
+
+    if "llm_raw_analysis" in analysis_data:
+        st.markdown("### 🤖 LLM Analysis (Raw)")
+        st.markdown(analysis_data["llm_raw_analysis"])
+
+    # Visual Knowledge Graph Section
+    st.markdown("---")
+    st.markdown("### 🕸️ Word Knowledge Graph")
+    _display_word_knowledge_graph(word, language, analysis_data)
+
     # Raw analysis data (collapsible)
     with st.expander("🔧 Raw Analysis Data", expanded=False):
         st.json(analysis_data)
+
+
+def _display_word_knowledge_graph(word: str, language: str, analysis_data: dict):
+    """
+    Create and display an interactive knowledge graph for the word analysis.
+
+    Args:
+        word: The word being analyzed
+        language: Language code
+        analysis_data: The analysis data dictionary
+    """
+    from pyvis.network import Network
+    import tempfile
+    import os
+
+    # Create a network
+    net = Network(height="450px", width="100%", bgcolor="#0E1117", font_color="#FAFAFA")
+    net.barnes_hut()
+
+    # Configure physics for better layout
+    net.set_options("""
+    {
+      "nodes": {
+        "borderWidth": 2,
+        "shadow": true,
+        "font": {"size": 14, "face": "Arial", "color": "#FAFAFA"}
+      },
+      "edges": {
+        "color": {"inherit": false},
+        "smooth": {"enabled": true, "type": "dynamic"},
+        "width": 2
+      },
+      "physics": {
+        "enabled": true,
+        "barnesHut": {
+          "gravitationalConstant": -3000,
+          "centralGravity": 0.3,
+          "springLength": 150,
+          "springConstant": 0.04
+        },
+        "stabilization": {"iterations": 150}
+      },
+      "interaction": {
+        "hover": true,
+        "tooltipDelay": 100,
+        "navigationButtons": true
+      }
+    }
+    """)
+
+    # Central word node (largest, distinct color)
+    pos = analysis_data.get("pos", "UNKNOWN")
+    central_color = "#FF6B6B"  # Coral red for main word
+    net.add_node(
+        "main",
+        label=word,
+        title=f"{word}\n{pos}\nLanguage: {language}",
+        color=central_color,
+        size=50,
+        font={"size": 20, "color": "#FFFFFF", "bold": True},
+        shape="circle"
+    )
+
+    node_id = 0
+
+    # Category colors
+    colors = {
+        "etymology": "#9B59B6",      # Purple
+        "synonyms": "#3498DB",       # Blue
+        "antonyms": "#E74C3C",       # Red
+        "conjugations": "#2ECC71",   # Green
+        "idioms": "#F39C12",         # Orange
+        "examples": "#1ABC9C",       # Teal
+        "cognates": "#E91E63",       # Pink
+        "collocations": "#00BCD4",   # Cyan
+        "related": "#9C27B0",        # Deep Purple
+        "forms": "#4CAF50",          # Green
+    }
+
+    def add_category_node(category_id, category_label, category_color, items, item_color=None):
+        """Add a category hub node with child nodes for items."""
+        nonlocal node_id
+        if not items:
+            return
+
+        # Add category hub node
+        cat_node_id = f"cat_{category_id}"
+        net.add_node(
+            cat_node_id,
+            label=category_label,
+            title=category_label,
+            color=category_color,
+            size=30,
+            shape="diamond"
+        )
+        net.add_edge("main", cat_node_id, color=category_color, width=3)
+
+        # Add item nodes
+        item_list = items if isinstance(items, list) else [items]
+        for item in item_list[:8]:  # Limit to 8 items per category
+            node_id += 1
+            item_str = str(item) if not isinstance(item, dict) else list(item.values())[0] if item else str(item)
+            if len(item_str) > 30:
+                item_str = item_str[:27] + "..."
+            net.add_node(
+                f"item_{node_id}",
+                label=item_str,
+                title=str(item),
+                color=item_color or category_color,
+                size=20,
+                shape="dot"
+            )
+            net.add_edge(cat_node_id, f"item_{node_id}", color=category_color, width=1)
+
+    # Add Etymology section
+    if "etymology" in analysis_data:
+        node_id += 1
+        net.add_node(
+            "etymology",
+            label="📜 Etymology",
+            title=analysis_data["etymology"],
+            color=colors["etymology"],
+            size=30,
+            shape="diamond"
+        )
+        net.add_edge("main", "etymology", color=colors["etymology"], width=3)
+
+        # Add origin details
+        if "language_origin" in analysis_data:
+            node_id += 1
+            net.add_node(
+                f"origin_{node_id}",
+                label=analysis_data["language_origin"],
+                title=f"Origin: {analysis_data['language_origin']}",
+                color=colors["etymology"],
+                size=20
+            )
+            net.add_edge("etymology", f"origin_{node_id}", color=colors["etymology"])
+
+        if "root" in analysis_data:
+            node_id += 1
+            net.add_node(
+                f"root_{node_id}",
+                label=f"Root: {analysis_data['root']}",
+                title=f"Root: {analysis_data['root']}",
+                color=colors["etymology"],
+                size=20
+            )
+            net.add_edge("etymology", f"root_{node_id}", color=colors["etymology"])
+
+    # Add Cognates
+    if "cognates" in analysis_data:
+        cognates = analysis_data["cognates"]
+        if isinstance(cognates, dict):
+            cognate_list = [f"{lang}: {w}" for lang, w in cognates.items()]
+        elif isinstance(cognates, list):
+            cognate_list = cognates
+        else:
+            cognate_list = [cognates]
+        add_category_node("cognates", "🌍 Cognates", colors["cognates"], cognate_list)
+
+    # Add Synonyms
+    if "synonyms" in analysis_data:
+        add_category_node("synonyms", "≈ Synonyms", colors["synonyms"], analysis_data["synonyms"])
+
+    # Add Antonyms
+    if "antonyms" in analysis_data:
+        add_category_node("antonyms", "≠ Antonyms", colors["antonyms"], analysis_data["antonyms"])
+
+    # Add Conjugations (for verbs)
+    if "conjugations" in analysis_data:
+        conj = analysis_data["conjugations"]
+        if isinstance(conj, dict):
+            conj_items = [f"{tense}: {forms}" for tense, forms in list(conj.items())[:6]]
+            add_category_node("conjugations", "📝 Conjugations", colors["conjugations"], conj_items)
+
+    # Add Idioms
+    if "idioms" in analysis_data:
+        idioms = analysis_data["idioms"]
+        if isinstance(idioms, dict):
+            idiom_list = list(idioms.keys())
+        elif isinstance(idioms, list):
+            idiom_list = idioms
+        else:
+            idiom_list = [idioms]
+        add_category_node("idioms", "🎭 Idioms", colors["idioms"], idiom_list)
+
+    # Add Collocations
+    if "collocations" in analysis_data:
+        add_category_node("collocations", "🔗 Collocations", colors["collocations"], analysis_data["collocations"])
+
+    # Add Examples
+    if "examples" in analysis_data:
+        examples = analysis_data["examples"]
+        if isinstance(examples, list):
+            short_examples = [ex[:40] + "..." if len(ex) > 40 else ex for ex in examples[:4]]
+            add_category_node("examples", "💬 Examples", colors["examples"], short_examples)
+
+    # Add Related Forms (plural, gender forms, etc.)
+    forms_data = []
+    if "plural" in analysis_data:
+        forms_data.append(f"Plural: {analysis_data['plural']}")
+    if "gender" in analysis_data:
+        forms_data.append(f"Gender: {analysis_data['gender']}")
+    if "infinitive" in analysis_data:
+        forms_data.append(f"Infinitive: {analysis_data['infinitive']}")
+    if "gender_forms" in analysis_data:
+        gf = analysis_data["gender_forms"]
+        if isinstance(gf, dict):
+            forms_data.extend([f"{k}: {v}" for k, v in gf.items()])
+    if "related_forms" in analysis_data:
+        rf = analysis_data["related_forms"]
+        if isinstance(rf, dict):
+            forms_data.extend([f"{k}: {v}" for k, v in rf.items()])
+
+    if forms_data:
+        add_category_node("forms", "📋 Forms", colors["forms"], forms_data)
+
+    # Generate HTML
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.html', mode='w') as f:
+        net.save_graph(f.name)
+        temp_path = f.name
+
+    with open(temp_path, 'r', encoding='utf-8') as f:
+        html_content = f.read()
+
+    os.unlink(temp_path)
+
+    # Add instructions
+    st.info("💡 **Interactive Graph:** Click and drag nodes to explore. Hover for details. Use mouse wheel to zoom.")
+
+    # Display the graph
+    st.components.v1.html(html_content, height=500)
+
+    # Add a legend
+    with st.expander("📊 Graph Legend", expanded=False):
+        leg_col1, leg_col2, leg_col3 = st.columns(3)
+        with leg_col1:
+            st.markdown("🔴 **Main Word** - Central node")
+            st.markdown("💜 **Etymology** - Word origins")
+            st.markdown("💗 **Cognates** - Related words in other languages")
+        with leg_col2:
+            st.markdown("💙 **Synonyms** - Similar meanings")
+            st.markdown("❤️ **Antonyms** - Opposite meanings")
+            st.markdown("💚 **Conjugations** - Verb forms")
+        with leg_col3:
+            st.markdown("🧡 **Idioms** - Fixed expressions")
+            st.markdown("💎 **Collocations** - Common combinations")
+            st.markdown("🩵 **Examples** - Usage in context")
 
 def _display_verb_analysis(analysis_data: dict):
     """Display verb-specific analysis."""
