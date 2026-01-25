@@ -3739,10 +3739,12 @@ def main():
                     if "current_word_analysis" in st.session_state:
                         del st.session_state["current_word_analysis"]
                     st.rerun()
-                else:
-                    st.info("💡 **Click on any word in the graph above to select it for analysis.**")
             else:
-                st.info("No graph data available yet. Translate some text to generate graphs.")
+                # No word selected - show appropriate message based on whether graph data exists
+                if st.session_state.get("graph_data"):
+                    st.info("💡 **Click on any word in the graph above to select it for analysis.**")
+                else:
+                    st.info("No graph data available yet. Translate some text to generate graphs.")
         
         with tab2:
             # Show co-occurrence networks
