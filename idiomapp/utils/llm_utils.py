@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
+import json
 
 # For Ollama
 import ollama
@@ -291,8 +292,74 @@ class OpenAIClient(LLMClient):
                     
                 except Exception as fallback_error:
                     logger.error(f"Fallback attempt also failed: {str(fallback_error)}")
-            
+
             raise e
+
+    async def generate_json(self, prompt: str, system_prompt: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Generate a JSON response from the OpenAI model using structured output.
+
+        Args:
+            prompt: The prompt to send to the model.
+            system_prompt: Optional system prompt for context.
+
+        Returns:
+            Dict: The parsed JSON response.
+        """
+        if not self.api_key:
+            logger.error("OpenAI API key not set")
+            return {"error": "OpenAI API key not set"}
+
+        try:
+            messages = []
+
+            # Add system prompt if provided
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+
+            # Add user prompt
+            messages.append({"role": "user", "content": prompt})
+
+            logger.info(f"Generating JSON with OpenAI model {self.model_name}")
+
+            # Prepare API request parameters with JSON mode
+            request_params = {
+                "model": self.model_name,
+                "messages": messages,
+                "response_format": {"type": "json_object"}
+            }
+
+            # Get model capabilities and use appropriate parameters
+            model_capabilities = get_model_capabilities(self.model_name)
+
+            # Add token limit parameter based on model capabilities
+            if model_capabilities.get("supports_max_completion_tokens", False):
+                request_params["max_completion_tokens"] = settings.openai_max_tokens
+            else:
+                request_params["max_tokens"] = settings.openai_max_tokens
+
+            # Add temperature if supported by the model
+            if model_capabilities.get("supports_custom_temperature", True):
+                request_params["temperature"] = settings.openai_temperature
+
+            # Make API request
+            response: ChatCompletion = self.client.chat.completions.create(**request_params)
+
+            # Extract and parse JSON response
+            generated_text = response.choices[0].message.content or "{}"
+
+            logger.info(f"Generated JSON length: {len(generated_text)}")
+            logger.debug(f"JSON Response: {generated_text[:200]}...")
+
+            return json.loads(generated_text)
+
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse JSON response: {e}")
+            return {"error": f"JSON parse error: {str(e)}"}
+        except Exception as e:
+            logger.error(f"Error generating JSON with OpenAI: {str(e)}")
+            return {"error": str(e)}
+
 
 # Helper functions from the original ollama_utils.py
 def get_openai_available_models(api_key: str = None, organization: str = None) -> list:

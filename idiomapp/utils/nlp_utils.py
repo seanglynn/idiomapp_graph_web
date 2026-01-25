@@ -884,33 +884,47 @@ def build_word_cooccurrence_network(text: str, language: str, window_size: int =
             # Check textacy version and use appropriate parameters
             textacy_version = textacy.__version__
             logger.info(f"Using textacy version: {textacy_version}")
-            
-            # Try different parameter combinations based on version compatibility
+
+            # Extract filtered tokens from the spaCy doc for newer textacy API
+            # Newer textacy versions expect Sequence[str] or Sequence[Sequence[str]]
+            filtered_tokens = [
+                token.text.lower() for token in doc
+                if term_filter(token)
+            ]
+
+            if not filtered_tokens:
+                logger.warning(f"No filtered tokens found. Using simplified approach for {language}.")
+                return _build_simple_cooccurrence_network(text, window_size, min_freq)
+
+            # Try building with the new API first (sequence of tokens)
             try:
-                # First try with term_filter (newer versions)
                 graph = build_cooccurrence_network(
-                    doc,
-                    window_size=window_size,
-                    edge_weighting="count",
-                    term_filter=term_filter
-                )
-            except TypeError:
-                # If term_filter fails, try without it (older versions)
-                logger.info("term_filter not supported, trying without it")
-                graph = build_cooccurrence_network(
-                    doc,
+                    [filtered_tokens],  # Pass as sequence of sequences (one "document")
                     window_size=window_size,
                     edge_weighting="count"
                 )
-            
+            except (TypeError, ValueError) as e:
+                logger.warning(f"New API format failed ({e}), trying legacy spaCy Doc format")
+                # Fall back to legacy format with spaCy Doc
+                try:
+                    graph = build_cooccurrence_network(
+                        doc,
+                        window_size=window_size,
+                        edge_weighting="count"
+                    )
+                except Exception:
+                    # If both fail, use simplified approach
+                    logger.error(f"Both textacy API formats failed. Using simplified approach.")
+                    return _build_simple_cooccurrence_network(text, window_size, min_freq)
+
             # If graph is empty, fall back to the simple approach
             if len(graph.nodes()) == 0:
                 logger.warning(f"Empty graph from textacy. Using simplified approach for {language}.")
                 return _build_simple_cooccurrence_network(text, window_size, min_freq)
-                
+
             logger.info(f"Built co-occurrence network with {len(graph.nodes)} nodes and {len(graph.edges)} edges")
             return graph
-            
+
         except Exception as e:
             logger.warning(f"Error in textacy network building: {e}. Using simplified approach.")
             return _build_simple_cooccurrence_network(text, window_size, min_freq)
