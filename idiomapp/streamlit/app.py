@@ -1639,21 +1639,10 @@ def enhance_graph_html(html_path: str, graph_data: dict) -> str:
                     var nodeData = graphNodes[nodeId];
                     if (nodeData) {{
                         console.log('📊 Node data:', nodeData);
-                        // Navigate parent window (we're in an IFrame)
-                        try {{
-                            var parentUrl = new URL(window.parent.location.href);
-                            parentUrl.searchParams.set('word_analysis_request', JSON.stringify(nodeData));
-                            window.parent.location.href = parentUrl.toString();
-                        }} catch (e) {{
-                            console.error('Parent navigation failed:', e);
-                            try {{
-                                var topUrl = new URL(window.top.location.href);
-                                topUrl.searchParams.set('word_analysis_request', JSON.stringify(nodeData));
-                                window.top.location.href = topUrl.toString();
-                            }} catch (e2) {{
-                                console.error('All navigation failed:', e2);
-                                alert('Click detected: ' + nodeData.word + ' (' + nodeData.language + ')\\nUnable to communicate with Streamlit.');
-                            }}
+                        // Show word info - user should use the dropdown below to analyze
+                        var statusDiv = document.getElementById('word-selection-status');
+                        if (statusDiv) {{
+                            statusDiv.innerHTML = '<div style="background: #4CAF50; color: white; padding: 10px; border-radius: 5px; margin: 10px 0; text-align: center;"><strong>Word: ' + nodeData.word + '</strong> (' + nodeData.language + ') - ' + nodeData.pos + '<br><small>Use the dropdown below the graph to select and analyze this word.</small></div>';
                         }}
                     }} else {{
                         console.log('⚠️ No node data found for ID:', nodeId);
@@ -3755,72 +3744,106 @@ def main():
             # Word Analysis Section
             st.markdown("---")
             st.markdown("### 🔍 Word Analysis")
-            
-            # Check if we have a selected word from the graph
-            if "selected_word_from_graph" in st.session_state:
-                selected_word_data = st.session_state["selected_word_from_graph"]
-                word = selected_word_data.get("word", "")
-                language = selected_word_data.get("language", "")
-                pos = selected_word_data.get("pos", "")
-                
-                st.success(f"**Selected Word**: {word} ({language}) - {pos}")
-                
-                # Analyze button
-                if st.button("🔍 Analyze Selected Word", type="primary"):
-                    if st.session_state.get("model_available", False):
-                        with st.spinner(f"Analyzing '{word}' using LLM..."):
-                            # Get the LLM client
-                            api_key = None
-                            organization = None
-                            if st.session_state["llm_provider"] == "openai":
-                                api_key = st.session_state.get("openai_api_key")
-                                organization = st.session_state.get("openai_organization")
-                            
-                            client = LLMClient.create(
-                                provider=st.session_state["llm_provider"], 
-                                model_name=st.session_state["model_name"],
-                                api_key=api_key,
-                                organization=organization
-                            )
-                            
-                            # Run the analysis
-                            loop = asyncio.new_event_loop()
-                            asyncio.set_event_loop(loop)
-                            try:
-                                analysis_data = loop.run_until_complete(
-                                    analyze_selected_word(word, language, client)
-                                )
-                                # Store the analysis for display
-                                st.session_state["current_word_analysis"] = analysis_data
-                                st.session_state["current_word"] = word
-                                st.session_state["current_word_lang"] = language
-                                st.rerun()
-                            finally:
-                                loop.close()
-                    else:
-                        st.error("⚠️ LLM model not available. Please check the model status above.")
-                
-                # Display analysis if available
-                analysis_data = st.session_state.get("current_word_analysis")
-                if analysis_data and st.session_state.get("current_word") == word:
-                    if "error" not in analysis_data:
-                        display_word_analysis(word, language, analysis_data)
-                    else:
-                        st.error(f"Analysis failed: {analysis_data['error']}")
-                
-                # Clear selection button
-                if st.button("🗑️ Clear Selection"):
-                    if "selected_word_from_graph" in st.session_state:
-                        del st.session_state["selected_word_from_graph"]
-                    if "current_word_analysis" in st.session_state:
-                        del st.session_state["current_word_analysis"]
-                    st.rerun()
-            else:
-                # No word selected - show appropriate message based on whether graph data exists
-                if st.session_state.get("graph_data"):
-                    st.info("💡 **Click on any word in the graph above to select it for analysis.**")
+
+            # Build list of words from graph data for selection
+            if st.session_state.get("graph_data"):
+                # Collect all words from all language graphs
+                word_options = []
+                for lang, data in st.session_state["graph_data"].items():
+                    for node in data.get("nodes", []):
+                        word_label = node.get("label", "")
+                        word_lang = node.get("language", lang)
+                        word_pos = node.get("pos", "")
+                        if word_label:
+                            # Create display string and store data
+                            display = f"{word_label} ({word_lang}) - {word_pos}"
+                            word_options.append({
+                                "display": display,
+                                "word": word_label,
+                                "language": word_lang,
+                                "pos": word_pos
+                            })
+
+                # Remove duplicates based on word+language
+                seen = set()
+                unique_options = []
+                for opt in word_options:
+                    key = (opt["word"], opt["language"])
+                    if key not in seen:
+                        seen.add(key)
+                        unique_options.append(opt)
+
+                if unique_options:
+                    # Create selectbox for word selection
+                    st.info("💡 **Select a word from the graph to analyze it:**")
+
+                    display_options = ["-- Select a word --"] + [opt["display"] for opt in unique_options]
+                    selected_display = st.selectbox(
+                        "Choose a word to analyze",
+                        options=display_options,
+                        key="word_analysis_selectbox"
+                    )
+
+                    if selected_display != "-- Select a word --":
+                        # Find the selected word data
+                        selected_word_data = next(
+                            (opt for opt in unique_options if opt["display"] == selected_display),
+                            None
+                        )
+
+                        if selected_word_data:
+                            word = selected_word_data["word"]
+                            language = selected_word_data["language"]
+                            pos = selected_word_data["pos"]
+
+                            st.success(f"**Selected Word**: {word} ({language}) - {pos}")
+
+                            # Analyze button
+                            if st.button("🔍 Analyze Selected Word", type="primary"):
+                                if st.session_state.get("model_available", False):
+                                    with st.spinner(f"Analyzing '{word}' using LLM..."):
+                                        # Get the LLM client
+                                        api_key = None
+                                        organization = None
+                                        if st.session_state["llm_provider"] == "openai":
+                                            api_key = st.session_state.get("openai_api_key")
+                                            organization = st.session_state.get("openai_organization")
+
+                                        client = LLMClient.create(
+                                            provider=st.session_state["llm_provider"],
+                                            model_name=st.session_state["model_name"],
+                                            api_key=api_key,
+                                            organization=organization
+                                        )
+
+                                        # Run the analysis
+                                        loop = asyncio.new_event_loop()
+                                        asyncio.set_event_loop(loop)
+                                        try:
+                                            analysis_data = loop.run_until_complete(
+                                                analyze_selected_word(word, language, client)
+                                            )
+                                            # Store the analysis for display
+                                            st.session_state["current_word_analysis"] = analysis_data
+                                            st.session_state["current_word"] = word
+                                            st.session_state["current_word_lang"] = language
+                                            st.rerun()
+                                        finally:
+                                            loop.close()
+                                else:
+                                    st.error("⚠️ LLM model not available. Please check the model status above.")
+
+                            # Display analysis if available
+                            analysis_data = st.session_state.get("current_word_analysis")
+                            if analysis_data and st.session_state.get("current_word") == word:
+                                if "error" not in analysis_data:
+                                    display_word_analysis(word, language, analysis_data)
+                                else:
+                                    st.error(f"Analysis failed: {analysis_data['error']}")
                 else:
-                    st.info("No graph data available yet. Translate some text to generate graphs.")
+                    st.info("No words available in the graph for analysis.")
+            else:
+                st.info("No graph data available yet. Translate some text to generate graphs.")
         
         with tab2:
             # Show co-occurrence networks
