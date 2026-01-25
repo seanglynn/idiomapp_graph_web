@@ -1616,10 +1616,71 @@ def enhance_graph_html(html_path: str, graph_data: dict) -> str:
         '''
         
         # Insert the status div and click handler into the HTML
-        enhanced_html = html_content.replace(
-            '</body>',
-            f'{status_div}\n{click_handler}\n</body>'
-        )
+        # First, try to inject click handler right after PyVis creates the network
+        # PyVis creates: network = new vis.Network(container, data, options);
+        # We need to add our click handler right after that
+
+        # Look for the network initialization pattern and inject our handler after it
+        network_init_pattern = 'network = new vis.Network(container, data, options);'
+
+        if network_init_pattern in html_content:
+            # Inject click handler directly after network creation
+            click_handler_injection = f'''
+
+            // === INJECTED CLICK HANDLER ===
+            console.log('🎯 Injecting click handler directly after network creation');
+            var graphNodes = {json.dumps({node["id"]: {"word": node["label"], "language": node.get("language", "unknown"), "pos": node.get("pos", "unknown")} for node in graph_data.get("nodes", [])})};
+
+            network.on('click', function(params) {{
+                console.log('🖱️ Network click event:', params);
+                if (params.nodes && params.nodes.length > 0) {{
+                    var nodeId = params.nodes[0];
+                    console.log('📍 Node clicked:', nodeId);
+                    var nodeData = graphNodes[nodeId];
+                    if (nodeData) {{
+                        console.log('📊 Node data:', nodeData);
+                        // Navigate parent window (we're in an IFrame)
+                        try {{
+                            var parentUrl = new URL(window.parent.location.href);
+                            parentUrl.searchParams.set('word_analysis_request', JSON.stringify(nodeData));
+                            window.parent.location.href = parentUrl.toString();
+                        }} catch (e) {{
+                            console.error('Parent navigation failed:', e);
+                            try {{
+                                var topUrl = new URL(window.top.location.href);
+                                topUrl.searchParams.set('word_analysis_request', JSON.stringify(nodeData));
+                                window.top.location.href = topUrl.toString();
+                            }} catch (e2) {{
+                                console.error('All navigation failed:', e2);
+                                alert('Click detected: ' + nodeData.word + ' (' + nodeData.language + ')\\nUnable to communicate with Streamlit.');
+                            }}
+                        }}
+                    }} else {{
+                        console.log('⚠️ No node data found for ID:', nodeId);
+                    }}
+                }}
+            }});
+            console.log('✅ Click handler attached successfully');
+            // === END INJECTED CLICK HANDLER ===
+
+            '''
+            enhanced_html = html_content.replace(
+                network_init_pattern,
+                network_init_pattern + click_handler_injection
+            )
+            # Also add the status div before </body>
+            enhanced_html = enhanced_html.replace(
+                '</body>',
+                f'{status_div}\n</body>'
+            )
+            logger.info("Successfully injected click handler after network initialization")
+        else:
+            # Fallback: inject before </body>
+            logger.warning("Could not find network init pattern, using fallback injection")
+            enhanced_html = html_content.replace(
+                '</body>',
+                f'{status_div}\n{click_handler}\n</body>'
+            )
         
         logger.info(f"Enhanced HTML length: {len(enhanced_html)} characters")
         logger.info(f"Enhanced HTML contains click handler: {'testJavaScript' in enhanced_html}")
@@ -1782,10 +1843,25 @@ def create_click_handler(graph_data: dict) -> str:
     
     // Function to submit word data to Streamlit
     function submitWordToStreamlit(nodeData) {{
-        // Use query parameters instead of form submission (more reliable with Streamlit)
-        const currentUrl = new URL(window.location.href);
-        currentUrl.searchParams.set('word_analysis_request', JSON.stringify(nodeData));
-        window.location.href = currentUrl.toString();
+        // Use parent window's location since we're in an IFrame
+        // Get the parent URL (Streamlit's URL), not the IFrame's URL
+        try {{
+            const parentUrl = new URL(window.parent.location.href);
+            parentUrl.searchParams.set('word_analysis_request', JSON.stringify(nodeData));
+            // Navigate the parent window, not the IFrame
+            window.parent.location.href = parentUrl.toString();
+        }} catch (e) {{
+            // Fallback: try using window.top for deeply nested iframes
+            console.error('Parent navigation failed, trying window.top:', e);
+            try {{
+                const topUrl = new URL(window.top.location.href);
+                topUrl.searchParams.set('word_analysis_request', JSON.stringify(nodeData));
+                window.top.location.href = topUrl.toString();
+            }} catch (e2) {{
+                console.error('All navigation methods failed:', e2);
+                alert('Unable to communicate with Streamlit. Please try refreshing the page.');
+            }}
+        }}
     }}
     
     // Wait for the page to load and then set up click handlers
