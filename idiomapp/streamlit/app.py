@@ -3725,8 +3725,8 @@ def main():
                         st.error("⚠️ LLM model not available. Please check the model status above.")
                 
                 # Display analysis if available
-                if "current_word_analysis" in st.session_state and st.session_state.get("current_word") == word:
-                    analysis_data = st.session_state["current_word_analysis"]
+                analysis_data = st.session_state.get("current_word_analysis")
+                if analysis_data and st.session_state.get("current_word") == word:
                     if "error" not in analysis_data:
                         display_word_analysis(word, language, analysis_data)
                     else:
