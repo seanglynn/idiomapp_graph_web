@@ -1337,61 +1337,93 @@ def _improve_pos_detection(word: str, language: str) -> Optional[str]:
 async def _get_llm_word_analysis(word: str, language: str, pos: str, client) -> Dict[str, Any]:
     """
     Get enhanced linguistic analysis using LLM for language learning insights.
-    
+
     Args:
         word: Word to analyze
         language: Language code
         pos: Part of speech
         client: LLM client
-        
+
     Returns:
         Dictionary with enhanced analysis
     """
     # Language names for prompts
     lang_names = {"en": "English", "es": "Spanish", "ca": "Catalan"}
     lang_name = lang_names.get(language, language)
-    
+
     # Create a comprehensive prompt that lets the LLM do the heavy lifting
     prompt = f"""
-        You are a {lang_name} language expert and linguistics professor. Analyze the word "{word}" 
+        You are a {lang_name} language expert, etymologist, and linguistics professor. Analyze the word "{word}"
         (part of speech: {pos}) and provide comprehensive linguistic information for language learners.
-        
-        Focus on practical language learning insights and provide:
-        
+
+        Provide a detailed analysis covering ALL of the following dimensions:
+
+        ## 1. ETYMOLOGY & ORIGINS
+        - "etymology": The word's origin and historical development
+        - "root": The root word or morpheme it derives from
+        - "language_origin": Original language (Latin, Greek, Arabic, Germanic, etc.)
+        - "cognates": Related words in other languages (especially English, Spanish, Catalan, French, Italian, Portuguese)
+        - "historical_evolution": How the meaning/form has changed over time
+
+        ## 2. CORE LINGUISTIC INFO
         **For VERBS:**
-        - Infinitive/base form
-        - Verb type (regular/irregular, conjugation pattern)
-        - Key conjugations (present, past, future)
-        - Related forms (participles, gerunds)
-        - Synonyms and related verbs
-        - Usage examples (2-3 simple sentences)
-        - Grammar rules and exceptions
-        
+        - "infinitive": Base/infinitive form
+        - "verb_type": Regular/irregular, conjugation group (-ar, -er, -ir for Spanish/Catalan)
+        - "conjugations": Key tenses (present, preterite, imperfect, future, conditional, subjunctive)
+        - "related_forms": Participles, gerunds
+        - "reflexive_form": If applicable
+
         **For NOUNS:**
-        - Gender and number forms
-        - Article usage
-        - Related forms (diminutives, augmentatives)
-        - Synonyms and related nouns
-        - Usage examples
-        - Cultural notes if relevant
-        
+        - "gender": Masculine/feminine
+        - "plural": Plural form
+        - "articles": Definite and indefinite articles
+        - "related_forms": Diminutives, augmentatives, collective forms
+
         **For ADJECTIVES:**
-        - Gender and number agreement
-        - Comparison forms
-        - Synonyms and antonyms
-        - Usage examples
-        - Position rules
-        
-        **For other parts of speech:**
-        - Definition and usage
-        - Related words
-        - Examples
-        - Grammar notes
-        
-        Format your response as clean, structured JSON. Focus on being educational and helpful for language learners.
+        - "gender_forms": Masculine/feminine singular and plural
+        - "comparison": Comparative and superlative forms
+        - "position": Before or after noun, and any meaning changes
+
+        ## 3. SEMANTIC RELATIONSHIPS
+        - "definition": Clear, concise definition
+        - "synonyms": List of synonyms with subtle differences explained
+        - "antonyms": List of antonyms
+        - "hypernym": Broader category word
+        - "hyponyms": More specific related words
+        - "semantic_field": Related concept words (e.g., for "run": walk, sprint, jog, dash)
+
+        ## 4. USAGE IN CONTEXT
+        - "register": Formal, informal, colloquial, vulgar, literary, technical
+        - "frequency": Common, uncommon, rare, archaic
+        - "regional_variations": Different usage in Spain vs Latin America, or regional dialects
+        - "examples": 3-4 example sentences showing different contexts
+        - "collocations": Common word combinations (e.g., "make a decision", "take a photo")
+
+        ## 5. IDIOMATIC EXPRESSIONS
+        - "idioms": Common idioms or fixed expressions using this word
+        - "proverbs": Any proverbs featuring this word
+        - "slang_usage": Informal or slang meanings if any
+
+        ## 6. CULTURAL & PRAGMATIC NOTES
+        - "cultural_notes": Cultural significance or connotations
+        - "false_friends": Words in other languages that look similar but mean different things
+        - "common_mistakes": Errors learners often make with this word
+        - "tips": Practical tips for remembering or using the word correctly
+
+        ## 7. PRONUNCIATION
+        - "ipa": International Phonetic Alphabet transcription
+        - "syllables": Syllable breakdown
+        - "stress": Which syllable is stressed
+        - "pronunciation_notes": Any special pronunciation rules
+
+        Format your response as clean, structured JSON with these exact field names.
+        Include as many fields as are relevant for this word. Focus on being educational and comprehensive.
         """
-    
-    system_prompt = f"You are a {lang_name} language expert and linguistics professor. Provide accurate, educational information in clean JSON format. Focus on practical language learning insights."
+
+    system_prompt = f"""You are a {lang_name} language expert, etymologist, and linguistics professor.
+Provide accurate, comprehensive linguistic information in clean JSON format.
+Include etymology, usage patterns, idioms, regional variations, and practical learning tips.
+Your goal is to give language learners deep insight into how this word works in real {lang_name}."""
     
     try:
         response = await client.generate_text(prompt, system_prompt=system_prompt)

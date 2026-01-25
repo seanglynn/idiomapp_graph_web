@@ -2725,14 +2725,14 @@ def handle_translation_error(error_message: str, source_lang: str, target_lang: 
 def display_word_analysis(word: str, language: str, analysis_data: dict):
     """
     Display detailed linguistic analysis of a word in an attractive format.
-    
+
     Args:
         word: The word being analyzed
         language: Language code
         analysis_data: Linguistic analysis data from analyze_word_linguistics
     """
     lang_name = LANGUAGE_MAP.get(language, {}).get("name", language.title())
-    
+
     # Create a beautiful header
     st.markdown(f"""
     <div style="background: linear-gradient(90deg, #4361EE, #4CC9F0); padding: 20px; border-radius: 10px; margin: 20px 0;">
@@ -2741,32 +2741,76 @@ def display_word_analysis(word: str, language: str, analysis_data: dict):
         </h2>
     </div>
     """, unsafe_allow_html=True)
-    
+
+    # Definition at the top if available
+    if "definition" in analysis_data:
+        st.markdown(f"**📖 Definition:** {analysis_data['definition']}")
+        st.markdown("---")
+
     # Basic information
     col1, col2, col3 = st.columns(3)
-    
+
     with col1:
         st.metric("Part of Speech", analysis_data.get("pos", "Unknown"))
         if "lemma" in analysis_data and analysis_data["lemma"] != word:
             st.metric("Base Form", analysis_data["lemma"])
-    
+        if "frequency" in analysis_data:
+            st.metric("Frequency", analysis_data["frequency"])
+
     with col2:
-        if "tag" in analysis_data:
+        if "register" in analysis_data:
+            st.metric("Register", analysis_data["register"])
+        elif "tag" in analysis_data:
             st.metric("Detailed Tag", analysis_data["tag"])
         if "dep" in analysis_data:
             st.metric("Dependency", analysis_data["dep"])
-    
+
     with col3:
         if "is_stop" in analysis_data:
             st.metric("Stop Word", "Yes" if analysis_data["is_stop"] else "No")
         if "is_entity" in analysis_data and analysis_data["is_entity"]:
             st.metric("Entity Type", analysis_data.get("entity_type", "Unknown"))
-    
-    # Enhanced LLM analysis
-    if any(key in analysis_data for key in ["infinitive", "conjugations", "gender", "examples", "synonyms"]):
-        st.markdown("### 🧠 LLM-Enhanced Analysis")
-        
-        # Handle different parts of speech
+
+    # Etymology & Origins Section
+    if any(key in analysis_data for key in ["etymology", "root", "language_origin", "cognates", "historical_evolution"]):
+        st.markdown("### 📜 Etymology & Origins")
+        if "etymology" in analysis_data:
+            st.markdown(f"**Origin:** {analysis_data['etymology']}")
+        if "root" in analysis_data:
+            st.markdown(f"**Root:** {analysis_data['root']}")
+        if "language_origin" in analysis_data:
+            st.markdown(f"**Source Language:** {analysis_data['language_origin']}")
+        if "historical_evolution" in analysis_data:
+            st.markdown(f"**Historical Evolution:** {analysis_data['historical_evolution']}")
+        if "cognates" in analysis_data:
+            cognates = analysis_data["cognates"]
+            if isinstance(cognates, list):
+                st.markdown(f"**Cognates:** {', '.join(cognates)}")
+            elif isinstance(cognates, dict):
+                cognate_list = [f"{lang}: {word}" for lang, word in cognates.items()]
+                st.markdown(f"**Cognates:** {', '.join(cognate_list)}")
+            else:
+                st.markdown(f"**Cognates:** {cognates}")
+
+    # Pronunciation Section
+    if any(key in analysis_data for key in ["ipa", "syllables", "stress", "pronunciation_notes"]):
+        st.markdown("### 🔊 Pronunciation")
+        pron_col1, pron_col2 = st.columns(2)
+        with pron_col1:
+            if "ipa" in analysis_data:
+                st.markdown(f"**IPA:** /{analysis_data['ipa']}/")
+            if "syllables" in analysis_data:
+                st.markdown(f"**Syllables:** {analysis_data['syllables']}")
+        with pron_col2:
+            if "stress" in analysis_data:
+                st.markdown(f"**Stress:** {analysis_data['stress']}")
+            if "pronunciation_notes" in analysis_data:
+                st.info(f"💡 {analysis_data['pronunciation_notes']}")
+
+    # Core linguistic info based on POS
+    has_core_info = any(key in analysis_data for key in ["infinitive", "conjugations", "gender", "plural", "gender_forms", "comparison"])
+    if has_core_info:
+        st.markdown("### 📝 Core Linguistic Information")
         if analysis_data.get("pos") == "VERB":
             _display_verb_analysis(analysis_data)
         elif analysis_data.get("pos") == "NOUN":
@@ -2775,7 +2819,135 @@ def display_word_analysis(word: str, language: str, analysis_data: dict):
             _display_adjective_analysis(analysis_data)
         else:
             _display_generic_analysis(analysis_data)
-    
+
+    # Semantic Relationships Section
+    if any(key in analysis_data for key in ["synonyms", "antonyms", "hypernym", "hyponyms", "semantic_field"]):
+        st.markdown("### 🔗 Semantic Relationships")
+        sem_col1, sem_col2 = st.columns(2)
+
+        with sem_col1:
+            if "synonyms" in analysis_data:
+                st.markdown("**Synonyms:**")
+                syns = analysis_data["synonyms"]
+                if isinstance(syns, list):
+                    for syn in syns[:8]:  # Limit to 8
+                        st.markdown(f"  • {syn}")
+                else:
+                    st.markdown(f"  • {syns}")
+
+            if "hypernym" in analysis_data:
+                st.markdown(f"**Broader term:** {analysis_data['hypernym']}")
+
+        with sem_col2:
+            if "antonyms" in analysis_data:
+                st.markdown("**Antonyms:**")
+                ants = analysis_data["antonyms"]
+                if isinstance(ants, list):
+                    for ant in ants[:8]:
+                        st.markdown(f"  • {ant}")
+                else:
+                    st.markdown(f"  • {ants}")
+
+            if "hyponyms" in analysis_data:
+                hypos = analysis_data["hyponyms"]
+                if isinstance(hypos, list):
+                    st.markdown(f"**Specific terms:** {', '.join(hypos[:6])}")
+                else:
+                    st.markdown(f"**Specific terms:** {hypos}")
+
+        if "semantic_field" in analysis_data:
+            field = analysis_data["semantic_field"]
+            if isinstance(field, list):
+                st.markdown(f"**Semantic field:** {', '.join(field)}")
+            else:
+                st.markdown(f"**Semantic field:** {field}")
+
+    # Usage & Examples Section
+    if any(key in analysis_data for key in ["examples", "collocations", "regional_variations"]):
+        st.markdown("### 💬 Usage & Examples")
+
+        if "examples" in analysis_data:
+            st.markdown("**Example Sentences:**")
+            examples = analysis_data["examples"]
+            if isinstance(examples, list):
+                for i, example in enumerate(examples[:5], 1):
+                    st.markdown(f"{i}. _{example}_")
+            else:
+                st.markdown(f"1. _{examples}_")
+
+        if "collocations" in analysis_data:
+            collocs = analysis_data["collocations"]
+            if isinstance(collocs, list):
+                st.markdown(f"**Common Collocations:** {', '.join(collocs[:10])}")
+            else:
+                st.markdown(f"**Common Collocations:** {collocs}")
+
+        if "regional_variations" in analysis_data:
+            st.info(f"🌍 **Regional Variations:** {analysis_data['regional_variations']}")
+
+    # Idioms & Expressions Section
+    if any(key in analysis_data for key in ["idioms", "proverbs", "slang_usage"]):
+        st.markdown("### 🎭 Idioms & Expressions")
+
+        if "idioms" in analysis_data:
+            idioms = analysis_data["idioms"]
+            st.markdown("**Idiomatic Expressions:**")
+            if isinstance(idioms, list):
+                for idiom in idioms[:6]:
+                    st.markdown(f"  • _{idiom}_")
+            elif isinstance(idioms, dict):
+                for idiom, meaning in list(idioms.items())[:6]:
+                    st.markdown(f"  • _{idiom}_ — {meaning}")
+            else:
+                st.markdown(f"  • _{idioms}_")
+
+        if "proverbs" in analysis_data:
+            proverbs = analysis_data["proverbs"]
+            st.markdown("**Proverbs:**")
+            if isinstance(proverbs, list):
+                for proverb in proverbs[:4]:
+                    st.markdown(f"  • _{proverb}_")
+            else:
+                st.markdown(f"  • _{proverbs}_")
+
+        if "slang_usage" in analysis_data:
+            st.warning(f"🗣️ **Slang/Informal:** {analysis_data['slang_usage']}")
+
+    # Cultural & Learning Notes Section
+    if any(key in analysis_data for key in ["cultural_notes", "false_friends", "common_mistakes", "tips", "grammar_notes"]):
+        st.markdown("### 📚 Learning Notes")
+
+        if "cultural_notes" in analysis_data:
+            st.info(f"🎭 **Cultural Context:** {analysis_data['cultural_notes']}")
+
+        if "false_friends" in analysis_data:
+            ff = analysis_data["false_friends"]
+            if isinstance(ff, list):
+                st.warning(f"⚠️ **False Friends:** {', '.join(ff)}")
+            elif isinstance(ff, dict):
+                ff_list = [f"{lang}: {word}" for lang, word in ff.items()]
+                st.warning(f"⚠️ **False Friends:** {', '.join(ff_list)}")
+            else:
+                st.warning(f"⚠️ **False Friends:** {ff}")
+
+        if "common_mistakes" in analysis_data:
+            mistakes = analysis_data["common_mistakes"]
+            if isinstance(mistakes, list):
+                st.error(f"❌ **Common Mistakes:** {'; '.join(mistakes)}")
+            else:
+                st.error(f"❌ **Common Mistakes:** {mistakes}")
+
+        if "tips" in analysis_data:
+            tips = analysis_data["tips"]
+            if isinstance(tips, list):
+                for tip in tips[:4]:
+                    st.success(f"💡 {tip}")
+            else:
+                st.success(f"💡 {tips}")
+
+        if "grammar_notes" in analysis_data:
+            st.info(f"📖 **Grammar Notes:** {analysis_data['grammar_notes']}")
+
     # Raw analysis data (collapsible)
     with st.expander("🔧 Raw Analysis Data", expanded=False):
         st.json(analysis_data)
