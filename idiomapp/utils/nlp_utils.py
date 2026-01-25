@@ -904,7 +904,7 @@ def build_word_cooccurrence_network(text: str, language: str, window_size: int =
                     edge_weighting="count"
                 )
             except (TypeError, ValueError) as e:
-                logger.info(f"New API format failed ({e}), trying legacy spaCy Doc format")
+                logger.warning(f"New API format failed ({e}), trying legacy spaCy Doc format")
                 # Fall back to legacy format with spaCy Doc
                 try:
                     graph = build_cooccurrence_network(
@@ -914,7 +914,7 @@ def build_word_cooccurrence_network(text: str, language: str, window_size: int =
                     )
                 except Exception:
                     # If both fail, use simplified approach
-                    logger.warning(f"Both textacy API formats failed. Using simplified approach.")
+                    logger.error(f"Both textacy API formats failed. Using simplified approach.")
                     return _build_simple_cooccurrence_network(text, window_size, min_freq)
 
             # If graph is empty, fall back to the simple approach
