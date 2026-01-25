@@ -110,43 +110,58 @@ class OllamaClient(LLMClient):
     async def generate_text(self, prompt, system_prompt=None):
         """
         Generate text from the model.
-        
+
         Args:
             prompt: The prompt to send to the model.
             system_prompt: Optional system prompt for context.
-            
+
         Returns:
             str: The generated text response.
         """
         if not self._check_model_availability():
             logger.error(f"Model {self.model_name} is not available")
             return "Error: Model not available. Please check if Ollama is running and the model is installed."
-            
+
         try:
-            # Prepare the prompt
-            full_prompt = prompt
+            # Build messages list with proper system/user separation
+            messages = []
             if system_prompt:
-                full_prompt = f"{system_prompt}\n\n{prompt}"
-            
+                messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "user", "content": prompt})
+
             logger.info(f"Generating text with Ollama model {self.model_name}")
-            logger.debug(f"Prompt: {full_prompt[:100]}...")
-            
-            # Make API request
+            logger.info(f"Prompt length: {len(prompt)} chars, System prompt: {len(system_prompt) if system_prompt else 0} chars")
+            logger.debug(f"User prompt: {prompt[:200]}...")
+
+            # Make API request - ollama.chat is synchronous but we wrap it for async interface
             response = ollama.chat(
                 model=self.model_name,
-                messages=[{"role": "user", "content": full_prompt}]
+                messages=messages
             )
-            
-            # Extract response text
-            generated_text = response['message']['content'] or ""
-            
+
+            # Extract response text - handle different response structures
+            generated_text = ""
+            if isinstance(response, dict):
+                if 'message' in response and isinstance(response['message'], dict):
+                    generated_text = response['message'].get('content', '')
+                elif 'response' in response:
+                    generated_text = response['response']
+                else:
+                    logger.warning(f"Unexpected response structure: {list(response.keys())}")
+                    generated_text = str(response)
+            else:
+                generated_text = str(response)
+
             logger.info(f"Generated text length: {len(generated_text)}")
-            logger.debug(f"Response: {generated_text[:100]}...")
-            
+            if generated_text:
+                logger.debug(f"Response preview: {generated_text[:200]}...")
+            else:
+                logger.warning("Empty response from Ollama")
+
             return generated_text
-            
+
         except Exception as e:
-            logger.error(f"Unexpected error generating text: {str(e)}")
+            logger.error(f"Unexpected error generating text: {str(e)}", exc_info=True)
             return f"Error: {str(e)}"
 
 

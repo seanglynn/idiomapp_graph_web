@@ -1351,82 +1351,61 @@ async def _get_llm_word_analysis(word: str, language: str, pos: str, client) -> 
     lang_names = {"en": "English", "es": "Spanish", "ca": "Catalan"}
     lang_name = lang_names.get(language, language)
 
-    # Create a comprehensive prompt that lets the LLM do the heavy lifting
-    prompt = f"""
-        You are a {lang_name} language expert, etymologist, and linguistics professor. Analyze the word "{word}"
-        (part of speech: {pos}) and provide comprehensive linguistic information for language learners.
+    # Create a focused prompt for word analysis - returning valid JSON
+    prompt = f"""Analyze the {lang_name} word "{word}" (part of speech: {pos}).
 
-        Provide a detailed analysis covering ALL of the following dimensions:
+Return a JSON object with these fields (include all that apply):
 
-        ## 1. ETYMOLOGY & ORIGINS
-        - "etymology": The word's origin and historical development
-        - "root": The root word or morpheme it derives from
-        - "language_origin": Original language (Latin, Greek, Arabic, Germanic, etc.)
-        - "cognates": Related words in other languages (especially English, Spanish, Catalan, French, Italian, Portuguese)
-        - "historical_evolution": How the meaning/form has changed over time
+{{
+  "definition": "clear definition of the word",
+  "etymology": "origin and history of the word",
+  "language_origin": "source language (Latin, Greek, etc.)",
+  "root": "root morpheme",
+  "cognates": ["related words in English", "French", "Italian", "Portuguese"],
+  "synonyms": ["synonym1", "synonym2", "synonym3"],
+  "antonyms": ["antonym1", "antonym2"],
+  "examples": ["Example sentence 1.", "Example sentence 2.", "Example sentence 3."],
+  "idioms": ["idiomatic expression using this word"],
+  "collocations": ["common word combination 1", "common word combination 2"],
+  "register": "formal/informal/colloquial",
+  "frequency": "common/uncommon/rare",
+  "regional_variations": "differences between regions",
+  "pronunciation": {{
+    "ipa": "IPA transcription",
+    "syllables": "syl-la-bles",
+    "stress": "stressed syllable"
+  }},
+  "grammar": {{
+    "infinitive": "base form (for verbs)",
+    "verb_type": "regular/irregular (for verbs)",
+    "gender": "masculine/feminine (for nouns)",
+    "plural": "plural form (for nouns)",
+    "conjugations": {{"present": "yo form", "past": "past form", "future": "future form"}}
+  }},
+  "tips": ["learning tip for this word"],
+  "common_mistakes": ["common error learners make"],
+  "false_friends": ["similar-looking word in another language that means something different"]
+}}
 
-        ## 2. CORE LINGUISTIC INFO
-        **For VERBS:**
-        - "infinitive": Base/infinitive form
-        - "verb_type": Regular/irregular, conjugation group (-ar, -er, -ir for Spanish/Catalan)
-        - "conjugations": Key tenses (present, preterite, imperfect, future, conditional, subjunctive)
-        - "related_forms": Participles, gerunds
-        - "reflexive_form": If applicable
+Respond ONLY with the JSON object, no other text. Make sure the JSON is valid."""
 
-        **For NOUNS:**
-        - "gender": Masculine/feminine
-        - "plural": Plural form
-        - "articles": Definite and indefinite articles
-        - "related_forms": Diminutives, augmentatives, collective forms
-
-        **For ADJECTIVES:**
-        - "gender_forms": Masculine/feminine singular and plural
-        - "comparison": Comparative and superlative forms
-        - "position": Before or after noun, and any meaning changes
-
-        ## 3. SEMANTIC RELATIONSHIPS
-        - "definition": Clear, concise definition
-        - "synonyms": List of synonyms with subtle differences explained
-        - "antonyms": List of antonyms
-        - "hypernym": Broader category word
-        - "hyponyms": More specific related words
-        - "semantic_field": Related concept words (e.g., for "run": walk, sprint, jog, dash)
-
-        ## 4. USAGE IN CONTEXT
-        - "register": Formal, informal, colloquial, vulgar, literary, technical
-        - "frequency": Common, uncommon, rare, archaic
-        - "regional_variations": Different usage in Spain vs Latin America, or regional dialects
-        - "examples": 3-4 example sentences showing different contexts
-        - "collocations": Common word combinations (e.g., "make a decision", "take a photo")
-
-        ## 5. IDIOMATIC EXPRESSIONS
-        - "idioms": Common idioms or fixed expressions using this word
-        - "proverbs": Any proverbs featuring this word
-        - "slang_usage": Informal or slang meanings if any
-
-        ## 6. CULTURAL & PRAGMATIC NOTES
-        - "cultural_notes": Cultural significance or connotations
-        - "false_friends": Words in other languages that look similar but mean different things
-        - "common_mistakes": Errors learners often make with this word
-        - "tips": Practical tips for remembering or using the word correctly
-
-        ## 7. PRONUNCIATION
-        - "ipa": International Phonetic Alphabet transcription
-        - "syllables": Syllable breakdown
-        - "stress": Which syllable is stressed
-        - "pronunciation_notes": Any special pronunciation rules
-
-        Format your response as clean, structured JSON with these exact field names.
-        Include as many fields as are relevant for this word. Focus on being educational and comprehensive.
-        """
-
-    system_prompt = f"""You are a {lang_name} language expert, etymologist, and linguistics professor.
-Provide accurate, comprehensive linguistic information in clean JSON format.
-Include etymology, usage patterns, idioms, regional variations, and practical learning tips.
-Your goal is to give language learners deep insight into how this word works in real {lang_name}."""
+    system_prompt = f"You are a {lang_name} linguistics expert. Respond only with valid JSON. No markdown, no explanation, just the JSON object."
     
     try:
+        # Log client info
+        client_type = type(client).__name__
         logger.info(f"Calling LLM for word analysis: {word} ({language})")
+        logger.info(f"Using client: {client_type}")
+
+        # Check client status
+        try:
+            status = client.get_model_status()
+            logger.info(f"Client status: {status}")
+            if not status.get("available", False):
+                logger.warning(f"Model may not be available: {status}")
+        except Exception as status_err:
+            logger.warning(f"Could not check client status: {status_err}")
+
         response = await client.generate_text(prompt, system_prompt=system_prompt)
 
         # Log the raw response for debugging

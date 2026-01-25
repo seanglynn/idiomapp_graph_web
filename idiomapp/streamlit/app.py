@@ -2792,23 +2792,40 @@ def display_word_analysis(word: str, language: str, analysis_data: dict):
             else:
                 st.markdown(f"**Cognates:** {cognates}")
 
-    # Pronunciation Section
-    if any(key in analysis_data for key in ["ipa", "syllables", "stress", "pronunciation_notes"]):
+    # Pronunciation Section - handle both flat and nested structures
+    pron_data = analysis_data.get("pronunciation", {}) if isinstance(analysis_data.get("pronunciation"), dict) else {}
+    has_pronunciation = (
+        any(key in analysis_data for key in ["ipa", "syllables", "stress", "pronunciation_notes"]) or
+        any(key in pron_data for key in ["ipa", "syllables", "stress"])
+    )
+    if has_pronunciation:
         st.markdown("### 🔊 Pronunciation")
         pron_col1, pron_col2 = st.columns(2)
         with pron_col1:
-            if "ipa" in analysis_data:
-                st.markdown(f"**IPA:** /{analysis_data['ipa']}/")
-            if "syllables" in analysis_data:
-                st.markdown(f"**Syllables:** {analysis_data['syllables']}")
+            ipa = analysis_data.get("ipa") or pron_data.get("ipa")
+            if ipa:
+                st.markdown(f"**IPA:** /{ipa}/")
+            syllables = analysis_data.get("syllables") or pron_data.get("syllables")
+            if syllables:
+                st.markdown(f"**Syllables:** {syllables}")
         with pron_col2:
-            if "stress" in analysis_data:
-                st.markdown(f"**Stress:** {analysis_data['stress']}")
+            stress = analysis_data.get("stress") or pron_data.get("stress")
+            if stress:
+                st.markdown(f"**Stress:** {stress}")
             if "pronunciation_notes" in analysis_data:
                 st.info(f"💡 {analysis_data['pronunciation_notes']}")
 
-    # Core linguistic info based on POS
-    has_core_info = any(key in analysis_data for key in ["infinitive", "conjugations", "gender", "plural", "gender_forms", "comparison"])
+    # Core linguistic info based on POS - handle both flat and nested 'grammar' structures
+    grammar_data = analysis_data.get("grammar", {}) if isinstance(analysis_data.get("grammar"), dict) else {}
+    has_core_info = (
+        any(key in analysis_data for key in ["infinitive", "conjugations", "gender", "plural", "gender_forms", "comparison"]) or
+        any(key in grammar_data for key in ["infinitive", "conjugations", "gender", "plural", "verb_type"])
+    )
+    # Merge grammar data into analysis_data for display functions
+    if grammar_data:
+        for key, value in grammar_data.items():
+            if key not in analysis_data:
+                analysis_data[key] = value
     if has_core_info:
         st.markdown("### 📝 Core Linguistic Information")
         if analysis_data.get("pos") == "VERB":
@@ -3134,12 +3151,12 @@ def _display_word_knowledge_graph(word: str, language: str, analysis_data: dict)
     if "antonyms" in analysis_data:
         add_category_node("antonyms", "≠ Antonyms", colors["antonyms"], analysis_data["antonyms"])
 
-    # Add Conjugations (for verbs)
-    if "conjugations" in analysis_data:
-        conj = analysis_data["conjugations"]
-        if isinstance(conj, dict):
-            conj_items = [f"{tense}: {forms}" for tense, forms in list(conj.items())[:6]]
-            add_category_node("conjugations", "📝 Conjugations", colors["conjugations"], conj_items)
+    # Add Conjugations (for verbs) - handle nested grammar structure
+    grammar_data = analysis_data.get("grammar", {}) if isinstance(analysis_data.get("grammar"), dict) else {}
+    conj = analysis_data.get("conjugations") or grammar_data.get("conjugations")
+    if conj and isinstance(conj, dict):
+        conj_items = [f"{tense}: {forms}" for tense, forms in list(conj.items())[:6]]
+        add_category_node("conjugations", "📝 Conjugations", colors["conjugations"], conj_items)
 
     # Add Idioms
     if "idioms" in analysis_data:
@@ -3163,14 +3180,22 @@ def _display_word_knowledge_graph(word: str, language: str, analysis_data: dict)
             short_examples = [ex[:40] + "..." if len(ex) > 40 else ex for ex in examples[:4]]
             add_category_node("examples", "💬 Examples", colors["examples"], short_examples)
 
-    # Add Related Forms (plural, gender forms, etc.)
+    # Add Related Forms (plural, gender forms, etc.) - handle nested grammar structure
     forms_data = []
-    if "plural" in analysis_data:
-        forms_data.append(f"Plural: {analysis_data['plural']}")
-    if "gender" in analysis_data:
-        forms_data.append(f"Gender: {analysis_data['gender']}")
-    if "infinitive" in analysis_data:
-        forms_data.append(f"Infinitive: {analysis_data['infinitive']}")
+    # Check both top-level and nested grammar structure
+    plural = analysis_data.get("plural") or grammar_data.get("plural")
+    gender = analysis_data.get("gender") or grammar_data.get("gender")
+    infinitive = analysis_data.get("infinitive") or grammar_data.get("infinitive")
+    verb_type = analysis_data.get("verb_type") or grammar_data.get("verb_type")
+
+    if plural:
+        forms_data.append(f"Plural: {plural}")
+    if gender:
+        forms_data.append(f"Gender: {gender}")
+    if infinitive:
+        forms_data.append(f"Infinitive: {infinitive}")
+    if verb_type:
+        forms_data.append(f"Verb type: {verb_type}")
     if "gender_forms" in analysis_data:
         gf = analysis_data["gender_forms"]
         if isinstance(gf, dict):
@@ -4240,16 +4265,25 @@ def main():
                                         # Get the LLM client
                                         api_key = None
                                         organization = None
-                                        if st.session_state["llm_provider"] == "openai":
+                                        provider = st.session_state["llm_provider"]
+                                        model_name = st.session_state["model_name"]
+
+                                        if provider == "openai":
                                             api_key = st.session_state.get("openai_api_key")
                                             organization = st.session_state.get("openai_organization")
 
+                                        logger.info(f"Creating LLM client: provider={provider}, model={model_name}")
+
                                         client = LLMClient.create(
-                                            provider=st.session_state["llm_provider"],
-                                            model_name=st.session_state["model_name"],
+                                            provider=provider,
+                                            model_name=model_name,
                                             api_key=api_key,
                                             organization=organization
                                         )
+
+                                        # Check client status
+                                        client_status = client.get_model_status()
+                                        logger.info(f"Client status: {client_status}")
 
                                         # Run the analysis
                                         loop = asyncio.new_event_loop()
@@ -4258,6 +4292,9 @@ def main():
                                             analysis_data = loop.run_until_complete(
                                                 analyze_selected_word(word, language, client)
                                             )
+                                            # Log what we got back
+                                            logger.info(f"Analysis result keys: {list(analysis_data.keys()) if analysis_data else 'None'}")
+
                                             # Store the analysis for display
                                             st.session_state["current_word_analysis"] = analysis_data
                                             st.session_state["current_word"] = word
