@@ -1581,462 +1581,69 @@ def visualize_translation_graph(graph_data):
     # Display the enhanced network
     st.components.v1.html(enhanced_html, height=400)
 
+def _build_click_handler_js(graph_data: dict) -> str:
+    """Build the JS snippet that attaches a click handler to the PyVis network.
+
+    Injected directly after `network = new vis.Network(...)` so the
+    `network` variable is still in scope.
+    """
+    nodes_map = {
+        node["id"]: {
+            "word": node["label"],
+            "language": node.get("language", "unknown"),
+            "pos": node.get("pos", "unknown"),
+        }
+        for node in graph_data.get("nodes", [])
+    }
+    return f'''
+            var graphNodes = {json.dumps(nodes_map)};
+            network.on('click', function(params) {{
+                if (params.nodes && params.nodes.length > 0) {{
+                    var nodeData = graphNodes[params.nodes[0]];
+                    if (nodeData) {{
+                        var el = document.getElementById('word-selection-status');
+                        if (el) {{
+                            el.innerHTML = '<div style="background:#4CAF50;color:#fff;padding:10px;border-radius:5px;margin:10px 0;text-align:center;">'
+                                + '<strong>Word: ' + nodeData.word + '</strong> (' + nodeData.language + ') - ' + nodeData.pos
+                                + '<br><small>Use the dropdown below the graph to select and analyze this word.</small></div>';
+                        }}
+                    }}
+                }}
+            }});
+            '''
+
+
+_STATUS_HTML = '''
+<div id="word-selection-status" style="margin:10px 0;"></div>
+<div style="margin:10px 0;padding:10px;background:#e3f2fd;border:1px solid #2196f3;border-radius:5px;">
+  <strong>Interactive Graph:</strong> Click on any word in the graph above to select it for analysis.
+</div>
+'''
+
+
 def enhance_graph_html(html_path: str, graph_data: dict) -> str:
-    """
-    Enhance the Pyvis HTML with click functionality and analysis display.
-    
-    Args:
-        html_path: Path to the original HTML file
-        graph_data: Graph data for analysis
-        
-    Returns:
-        Enhanced HTML string
-    """
+    """Enhance PyVis HTML with a click handler and status feedback div."""
     try:
         with open(html_path, 'r', encoding='utf-8') as f:
             html_content = f.read()
-        
-        logger.info(f"Original HTML length: {len(html_content)} characters")
-        logger.info(f"HTML contains </body>: {'</body>' in html_content}")
-        
-        # Create click handler JavaScript
-        click_handler = create_click_handler(graph_data)
-        logger.info(f"Click handler length: {len(click_handler)} characters")
-        
-        # Add a simple status div for word selection feedback
-        status_div = '''
-        <div id="word-selection-status" style="margin: 10px 0;"></div>
-        <div style="margin: 10px 0; padding: 10px; background: #e3f2fd; border: 1px solid #2196f3; border-radius: 5px;">
-            <strong>🔍 Interactive Graph:</strong> Click on any word in the graph above to select it for analysis!
-        </div>
-        <div id="debug-info" style="margin: 10px 0; padding: 10px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 5px; font-size: 12px;">
-            <strong>🐛 Debug Info:</strong> Check browser console for click handler status
-            <br><button onclick="testJavaScript()" style="margin-top: 5px; padding: 5px 10px; background: #007bff; color: white; border: none; border-radius: 3px; cursor: pointer;">Test JavaScript</button>
-        </div>
-        '''
-        
-        # Insert the status div and click handler into the HTML
-        # First, try to inject click handler right after PyVis creates the network
-        # PyVis creates: network = new vis.Network(container, data, options);
-        # We need to add our click handler right after that
 
-        # Look for the network initialization pattern and inject our handler after it
-        network_init_pattern = 'network = new vis.Network(container, data, options);'
+        network_init = 'network = new vis.Network(container, data, options);'
 
-        if network_init_pattern in html_content:
-            # Inject click handler directly after network creation
-            click_handler_injection = f'''
-
-            // === INJECTED CLICK HANDLER ===
-            console.log('🎯 Injecting click handler directly after network creation');
-            var graphNodes = {json.dumps({node["id"]: {"word": node["label"], "language": node.get("language", "unknown"), "pos": node.get("pos", "unknown")} for node in graph_data.get("nodes", [])})};
-
-            network.on('click', function(params) {{
-                console.log('🖱️ Network click event:', params);
-                if (params.nodes && params.nodes.length > 0) {{
-                    var nodeId = params.nodes[0];
-                    console.log('📍 Node clicked:', nodeId);
-                    var nodeData = graphNodes[nodeId];
-                    if (nodeData) {{
-                        console.log('📊 Node data:', nodeData);
-                        // Show word info - user should use the dropdown below to analyze
-                        var statusDiv = document.getElementById('word-selection-status');
-                        if (statusDiv) {{
-                            statusDiv.innerHTML = '<div style="background: #4CAF50; color: white; padding: 10px; border-radius: 5px; margin: 10px 0; text-align: center;"><strong>Word: ' + nodeData.word + '</strong> (' + nodeData.language + ') - ' + nodeData.pos + '<br><small>Use the dropdown below the graph to select and analyze this word.</small></div>';
-                        }}
-                    }} else {{
-                        console.log('⚠️ No node data found for ID:', nodeId);
-                    }}
-                }}
-            }});
-            console.log('✅ Click handler attached successfully');
-            // === END INJECTED CLICK HANDLER ===
-
-            '''
-            enhanced_html = html_content.replace(
-                network_init_pattern,
-                network_init_pattern + click_handler_injection
-            )
-            # Also add the status div before </body>
-            enhanced_html = enhanced_html.replace(
-                '</body>',
-                f'{status_div}\n</body>'
-            )
-            logger.info("Successfully injected click handler after network initialization")
+        if network_init in html_content:
+            handler_js = _build_click_handler_js(graph_data)
+            enhanced_html = html_content.replace(network_init, network_init + handler_js)
+            enhanced_html = enhanced_html.replace('</body>', f'{_STATUS_HTML}\n</body>')
+            logger.debug("Injected click handler after network initialization")
         else:
-            # Fallback: inject before </body>
-            logger.warning("Could not find network init pattern, using fallback injection")
-            enhanced_html = html_content.replace(
-                '</body>',
-                f'{status_div}\n{click_handler}\n</body>'
-            )
-        
-        logger.info(f"Enhanced HTML length: {len(enhanced_html)} characters")
-        logger.info(f"Enhanced HTML contains click handler: {'testJavaScript' in enhanced_html}")
-        
+            logger.warning("Could not find network init pattern — click handler not injected")
+            enhanced_html = html_content.replace('</body>', f'{_STATUS_HTML}\n</body>')
+
         return enhanced_html
-        
+
     except Exception as e:
         logger.error(f"Error enhancing HTML: {e}")
-        # Return original HTML if enhancement fails
         with open(html_path, 'r', encoding='utf-8') as f:
             return f.read()
-
-def create_analysis_modal() -> str:
-    """Create HTML for the analysis modal that appears when clicking nodes."""
-    return """
-    <!-- Analysis Modal -->
-    <div id="analysisModal" style="
-        display: none;
-        position: fixed;
-        z-index: 1000;
-        left: 0;
-        top: 0;
-        width: 100%;
-        height: 100%;
-        background-color: rgba(0,0,0,0.7);
-        backdrop-filter: blur(5px);
-    ">
-        <div style="
-            background: #2D2D2D;
-            margin: 5% auto;
-            padding: 20px;
-            border: 2px solid #4361EE;
-            border-radius: 15px;
-            width: 80%;
-            max-width: 600px;
-            max-height: 80vh;
-            overflow-y: auto;
-            color: white;
-            font-family: Arial, sans-serif;
-        ">
-            <div style="
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                margin-bottom: 20px;
-                border-bottom: 1px solid #444;
-                padding-bottom: 10px;
-            ">
-                <h2 id="modalTitle" style="margin: 0; color: #4CC9F0;">Word Analysis</h2>
-                <button onclick="closeAnalysisModal()" style="
-                    background: #FF3B30;
-                    color: white;
-                    border: none;
-                    border-radius: 50%;
-                    width: 30px;
-                    height: 30px;
-                    font-size: 18px;
-                    cursor: pointer;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                ">×</button>
-            </div>
-            
-            <div id="modalContent">
-                <div style="text-align: center; padding: 40px;">
-                    <div style="font-size: 48px; margin-bottom: 20px;">🔍</div>
-                    <p>Click on a word in the graph to see detailed linguistic analysis.</p>
-                </div>
-            </div>
-            
-            <div id="modalLoading" style="display: none; text-align: center; padding: 40px;">
-                <div style="font-size: 48px; margin-bottom: 20px;">⏳</div>
-                <p>Analyzing word...</p>
-            </div>
-        </div>
-    </div>
-    """
-
-def create_click_handler(graph_data: dict) -> str:
-    """Create JavaScript to handle node clicks and show analysis."""
-    # Convert graph data to JavaScript object
-    nodes_data = {}
-    for node in graph_data.get("nodes", []):
-        nodes_data[node["id"]] = {
-            "word": node["label"],
-            "language": node.get("language", "unknown"),
-            "pos": node.get("pos", "unknown")
-        }
-    
-    nodes_json = json.dumps(nodes_data)
-    
-    # Log the data being passed to JavaScript
-    logger.info(f"Creating click handler with {len(nodes_data)} nodes")
-    if nodes_data:
-        sample_items = list(nodes_data.items())[:3]
-        logger.info(f"Sample node data: {sample_items}")
-    else:
-        logger.info("No nodes data available")
-    
-    return f"""
-    <script>
-    console.log('🔍 Word analysis script loaded successfully!');
-    console.log('Script execution started at:', new Date().toISOString());
-    console.log('Graph nodes data:', {nodes_json});
-    
-    // Immediate test to verify script is running
-    (function() {{
-        console.log('🚀 Immediate function execution test - script is running!');
-        console.log('Window object available:', typeof window !== 'undefined');
-        console.log('Document object available:', typeof document !== 'undefined');
-        console.log('Current URL:', window.location.href);
-    }})();
-    
-    // Store graph data for analysis
-    const graphNodes = {nodes_json};
-    
-    // Test function to verify JavaScript is working
-    function testJavaScript() {{
-        console.log('🧪 JavaScript test function called!');
-        console.log('Graph nodes available:', Object.keys(graphNodes).length);
-        console.log('Sample node data:', Object.values(graphNodes)[0]);
-        alert('JavaScript is working! Check console for details.');
-    }}
-    
-    // Make test function globally available
-    window.testJavaScript = testJavaScript;
-    
-    // Function to handle node clicks
-    function handleNodeClick(nodeData) {{
-        console.log('Node clicked:', nodeData);
-        
-        // Show word info
-        const message = `Word: ${{nodeData.word}}\\nLanguage: ${{nodeData.language}}\\nPart of Speech: ${{nodeData.pos}}\\n\\nThis word has been selected for analysis!`;
-        alert(message);
-        
-        // Store the selected word in sessionStorage
-        sessionStorage.setItem('selectedWord', JSON.stringify(nodeData));
-        
-        // Show a visual indicator that a word was selected
-        const statusDiv = document.getElementById('word-selection-status');
-        if (statusDiv) {{
-            statusDiv.innerHTML = `
-                <div style="
-                    background: #4CAF50; 
-                    color: white; 
-                    padding: 10px; 
-                    border-radius: 5px; 
-                    margin: 10px 0;
-                    text-align: center;
-                ">
-                    ✅ <strong>${{nodeData.word}}</strong> selected for analysis!
-                </div>
-            `;
-        }}
-        
-        // Create a simple form to submit the word data to Streamlit
-        submitWordToStreamlit(nodeData);
-    }}
-    
-    // Function to submit word data to Streamlit
-    function submitWordToStreamlit(nodeData) {{
-        // Use parent window's location since we're in an IFrame
-        // Get the parent URL (Streamlit's URL), not the IFrame's URL
-        try {{
-            const parentUrl = new URL(window.parent.location.href);
-            parentUrl.searchParams.set('word_analysis_request', JSON.stringify(nodeData));
-            // Navigate the parent window, not the IFrame
-            window.parent.location.href = parentUrl.toString();
-        }} catch (e) {{
-            // Fallback: try using window.top for deeply nested iframes
-            console.error('Parent navigation failed, trying window.top:', e);
-            try {{
-                const topUrl = new URL(window.top.location.href);
-                topUrl.searchParams.set('word_analysis_request', JSON.stringify(nodeData));
-                window.top.location.href = topUrl.toString();
-            }} catch (e2) {{
-                console.error('All navigation methods failed:', e2);
-                alert('Unable to communicate with Streamlit. Please try refreshing the page.');
-            }}
-        }}
-    }}
-    
-    // Wait for the page to load and then set up click handlers
-    window.addEventListener('load', function() {{
-        console.log('Page loaded, setting up click handlers...');
-        
-        // Function to set up click handlers
-        function setupClickHandlers() {{
-            console.log('Setting up click handlers...');
-            
-            // Try multiple methods to find the network
-            let network = null;
-            
-            // Method 1: Look for containers with mynetwork in ID
-            const containers = document.querySelectorAll('[id*="mynetwork"]');
-            console.log('Found containers:', containers.length);
-            
-            if (containers.length > 0) {{
-                const container = containers[0];
-                console.log('Container found:', container);
-                console.log('Container properties:', Object.getOwnPropertyNames(container));
-                console.log('Container __proto__:', Object.getOwnPropertyNames(container.__proto__));
-                
-                // Try to get network instance
-                if (container.__vis_network) {{
-                    network = container.__vis_network;
-                    console.log('Network found via __vis_network');
-                }} else if (container.vis_network) {{
-                    network = container.vis_network;
-                    console.log('Network found via vis_network');
-                }} else if (container.network) {{
-                    network = container.network;
-                    console.log('Network found via network');
-                }}
-                
-                // Method 1.5: Check all properties for network-like objects
-                for (const prop of Object.getOwnPropertyNames(container)) {{
-                    if (prop.includes('network') || prop.includes('vis')) {{
-                        console.log('Found potential network property:', prop, container[prop]);
-                    }}
-                }}
-            }}
-            
-            // Method 2: Look for global network variable
-            if (!network && typeof window.vis_network !== 'undefined') {{
-                network = window.vis_network;
-                console.log('Network found via global vis_network');
-            }}
-            
-            // Method 3: Look for any element with vis-network class
-            if (!network) {{
-                const visElements = document.querySelectorAll('.vis-network');
-                if (visElements.length > 0) {{
-                    const visElement = visElements[0];
-                    if (visElement.__vis_network) {{
-                        network = visElement.__vis_network;
-                        console.log('Network found via vis-network class');
-                    }}
-                }}
-            }}
-            
-            // Method 4: Look for any element with data-id containing "mynetwork"
-            if (!network) {{
-                const networkElements = document.querySelectorAll('[data-id*="mynetwork"]');
-                console.log('Found elements with data-id containing mynetwork:', networkElements.length);
-                if (networkElements.length > 0) {{
-                    const element = networkElements[0];
-                    console.log('Element properties:', Object.getOwnPropertyNames(element));
-                    if (element.__vis_network) {{
-                        network = element.__vis_network;
-                        console.log('Network found via data-id element');
-                    }}
-                }}
-            }}
-            
-            // Method 5: Check all global variables for network objects
-            if (!network) {{
-                console.log('Checking global variables for network objects...');
-                for (const key in window) {{
-                    if (key.includes('network') || key.includes('vis')) {{
-                        console.log('Found global variable:', key, window[key]);
-                    }}
-                }}
-            }}
-            
-            if (network) {{
-                console.log('Network found, setting up click handler');
-                
-                // Add click event listener
-                network.on('click', function(params) {{
-                    console.log('Network click event:', params);
-                    if (params.nodes && params.nodes.length > 0) {{
-                        const nodeId = params.nodes[0];
-                        console.log('Node ID clicked:', nodeId);
-                        const nodeData = graphNodes[nodeId];
-                        if (nodeData) {{
-                            console.log('Node data found:', nodeData);
-                            handleNodeClick(nodeData);
-                        }} else {{
-                            console.log('No node data found for ID:', nodeId);
-                        }}
-                    }}
-                }});
-                
-                console.log('Click handler attached successfully');
-                return true;
-            }} else {{
-                console.log('Network not found, will retry...');
-                return false;
-            }}
-        }}
-        
-        // Try to set up handlers immediately
-        if (!setupClickHandlers()) {{
-            // If not ready, retry with increasing delays
-            const retryDelays = [500, 1000, 2000, 3000];
-            retryDelays.forEach((delay, index) => {{
-                setTimeout(() => {{
-                    console.log(`Retry ${{index + 1}} after ${{delay}}ms`);
-                    if (setupClickHandlers()) {{
-                        console.log('Click handlers successfully set up on retry');
-                    }}
-                }}, delay);
-            }});
-        }}
-    }});
-    
-    // Add visual feedback for clickable nodes and fallback click handlers
-    window.addEventListener('load', function() {{
-        setTimeout(function() {{
-            const nodes = document.querySelectorAll('.vis-node');
-            console.log('Found vis nodes:', nodes.length);
-            nodes.forEach(node => {{
-                node.style.cursor = 'pointer';
-                node.title = 'Click to analyze this word';
-                
-                // Add fallback click handler directly to DOM elements
-                node.addEventListener('click', function(e) {{
-                    e.preventDefault();
-                    e.stopPropagation();
-                    console.log('Fallback click handler triggered');
-                    
-                    // Try to extract node ID from the element
-                    const nodeId = this.getAttribute('data-id') || this.id;
-                    if (nodeId && graphNodes[nodeId]) {{
-                        console.log('Fallback: Node data found for ID:', nodeId);
-                        handleNodeClick(graphNodes[nodeId]);
-                    }} else {{
-                        console.log('Fallback: No node data found, trying to find by position');
-                        // Try to find node by position or other attributes
-                        const nodeText = this.textContent || this.innerText;
-                        if (nodeText) {{
-                            // Find node by label
-                            for (const id in graphNodes) {{
-                                const data = graphNodes[id];
-                                if (data.word === nodeText.trim()) {{
-                                    console.log('Fallback: Found node by text:', nodeText);
-                                    handleNodeClick(data);
-                                    break;
-                                }}
-                            }}
-                        }}
-                    }}
-                }});
-            }});
-        }}, 1500);
-        
-        // Additional fallback: Listen for clicks on the entire graph area
-        setTimeout(function() {{
-            const graphArea = document.querySelector('.vis-network') || document.querySelector('[id*="mynetwork"]');
-            if (graphArea) {{
-                console.log('Setting up graph area click listener');
-                graphArea.addEventListener('click', function(e) {{
-                    // Only handle if we clicked on a node (not the background)
-                    if (e.target.classList.contains('vis-node') || e.target.closest('.vis-node')) {{
-                        console.log('Graph area click on node detected');
-                        // The node click handler should have already handled this
-                        return;
-                    }}
-                    console.log('Graph area background click');
-                }});
-            }}
-        }}, 2000);
-    }});
-    </script>
-    """
 
 def adjust_color(hex_color, amount):
     """Adjust a hex color by lightening or darkening it"""
@@ -2830,12 +2437,6 @@ def _display_analysis_panels(word: str, language: str, analysis_data: dict, pron
     tabs = st.tabs(tab_labels)
     tab_idx = 0
 
-    def scroll_wrap(content_fn):
-        """Wrap content in a fixed-height scrollable div via HTML component."""
-        # We can't easily make Streamlit containers scroll, so we collect
-        # content via a container and rely on the tab itself being compact.
-        content_fn()
-
     # ── Origins tab ──────────────────────────────────────────────────────────
     if "📜 Origins" in tab_labels:
         with tabs[tab_idx]:
@@ -2858,9 +2459,6 @@ def _display_analysis_panels(word: str, language: str, analysis_data: dict, pron
                     st.markdown("  " + " · ".join(f"**{c}**" for c in cognates))
                 else:
                     st.markdown(f"  {cognates}")
-    else:
-        tab_idx += 0  # keep counter consistent
-
     # ── Meaning tab ──────────────────────────────────────────────────────────
     if "🔗 Meaning" in tab_labels:
         with tabs[tab_idx]:
@@ -3412,12 +3010,6 @@ async def analyze_selected_word(word: str, language: str, client):
         logger.error(f"Error analyzing word {word}: {e}")
         return {"error": f"Analysis failed: {str(e)}"}
 
-def add_message_handler():
-    """Add a message handler to receive analysis requests from the graph."""
-    # This is a placeholder for now - in a real implementation, we'd need to
-    # use Streamlit's component communication or a different approach
-    pass
-
 def main():
     # Initialize session state for help page if not exists
     if "show_help_page" not in st.session_state:
@@ -3467,27 +3059,6 @@ def main():
     # Initialize graph storage
     if "graph_storage" not in st.session_state:
         st.session_state.graph_storage = get_graph_storage()
-    
-    # Handle word analysis requests from graph clicks
-    if "word_analysis_request" in st.query_params:
-        try:
-            st.write("🔍 **Debug**: Received word analysis request!")
-            word_data = json.loads(st.query_params["word_analysis_request"])
-            st.write(f"🔍 **Debug**: Word data: {word_data}")
-            
-            st.session_state["selected_word_from_graph"] = {
-                "word": word_data.get("word", ""),
-                "language": word_data.get("language", ""),
-                "pos": word_data.get("pos", "")
-            }
-            st.write(f"🔍 **Debug**: Stored in session state: {st.session_state['selected_word_from_graph']}")
-            
-            # Clear the query param to avoid reprocessing
-            st.query_params.clear()
-            st.rerun()
-        except Exception as e:
-            st.error(f"Error processing word selection: {e}")
-            st.write(f"🔍 **Debug**: Exception details: {str(e)}")
     
     # Now get LLM provider and model from properly initialized session state
     llm_provider = st.session_state["llm_provider"]
@@ -4154,20 +3725,6 @@ def main():
                 # Display the selected graph
                 st.markdown(f"**Semantic network for {get_language_display(selected_lang)}**")
                 visualize_translation_graph(graph_data)
-                
-            # Debug section for troubleshooting
-            with st.expander("🐛 Debug Graph Data", expanded=False):
-                st.write("**Current Graph Data:**")
-                if st.session_state["graph_data"]:
-                    for lang, data in st.session_state["graph_data"].items():
-                        st.write(f"**{lang}**: {len(data.get('nodes', []))} nodes, {len(data.get('edges', []))} edges")
-                        if data.get('nodes'):
-                            st.write(f"Sample nodes: {[n.get('label', '') for n in data['nodes'][:5]]}")
-                else:
-                    st.write("No graph data available")
-                
-                st.write("**Session State Keys:**")
-                st.write(list(st.session_state.keys()))
                 
             # Add a legend explaining the graph
             with st.expander("📊 Graph Legend", expanded=False):
