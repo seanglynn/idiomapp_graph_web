@@ -1255,8 +1255,6 @@ async def analyze_word_linguistics(word: str, language: str, client=None) -> Dic
                 analysis.update(enhanced_info)
             except Exception as e:
                 logger.warning(f"LLM analysis failed for {word}: {e}")
-                # Fall back to basic analysis
-                pass
         
         return analysis
         
@@ -1392,15 +1390,13 @@ Respond ONLY with the JSON object, no other text. Make sure the JSON is valid.""
     system_prompt = f"You are a {lang_name} linguistics expert. Respond only with valid JSON. No markdown, no explanation, just the JSON object."
     
     try:
-        # Log client info
         client_type = type(client).__name__
-        logger.info(f"Calling LLM for word analysis: {word} ({language})")
-        logger.info(f"Using client: {client_type}")
+        logger.debug(f"Calling LLM for word analysis: {word} ({language}), client={client_type}")
 
         # Check client status
         try:
             status = client.get_model_status()
-            logger.info(f"Client status: {status}")
+            logger.debug(f"Client status: {status}")
             if not status.get("available", False):
                 logger.warning(f"Model may not be available: {status}")
         except Exception as status_err:
@@ -1408,37 +1404,27 @@ Respond ONLY with the JSON object, no other text. Make sure the JSON is valid.""
 
         response = await client.generate_text(prompt, system_prompt=system_prompt)
 
-        # Log the raw response for debugging
-        logger.info(f"LLM response length: {len(response) if response else 0}")
-        logger.debug(f"LLM raw response: {response[:500] if response else 'EMPTY'}...")
+        logger.debug(f"LLM response length: {len(response) if response else 0}")
 
         if not response or response.strip() == "":
             logger.warning(f"Empty response from LLM for {word}")
             return {"llm_error": "Empty response from LLM"}
 
-        # Check if response is an error message
         if response.startswith("Error:"):
             logger.warning(f"LLM returned error: {response}")
             return {"llm_error": response}
 
-        # Try to extract JSON from response
-        import json
-        import re
-
         # Method 1: Try to find JSON block with ```json markers
         json_block_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', response, re.DOTALL)
         if json_block_match:
-            json_str = json_block_match.group(1)
-            logger.info(f"Found JSON in code block for {word}")
             try:
-                enhanced_data = json.loads(json_str)
-                logger.info(f"Successfully parsed JSON with {len(enhanced_data)} fields")
+                enhanced_data = json.loads(json_block_match.group(1))
+                logger.debug(f"Parsed JSON from code block ({len(enhanced_data)} fields)")
                 return enhanced_data
             except json.JSONDecodeError as e:
                 logger.warning(f"Failed to parse JSON from code block: {e}")
 
-        # Method 2: Find the outermost JSON object
-        # Count braces to find complete JSON
+        # Method 2: Find the outermost JSON object by counting braces
         brace_count = 0
         json_start = -1
         json_end = -1
@@ -1455,24 +1441,20 @@ Respond ONLY with the JSON object, no other text. Make sure the JSON is valid.""
 
         if json_start != -1 and json_end != -1:
             json_str = response[json_start:json_end]
-            logger.info(f"Found JSON object from position {json_start} to {json_end}")
             try:
                 enhanced_data = json.loads(json_str)
-                logger.info(f"Successfully parsed JSON with {len(enhanced_data)} fields")
+                logger.debug(f"Parsed JSON object ({len(enhanced_data)} fields)")
                 return enhanced_data
-            except json.JSONDecodeError as e:
-                logger.warning(f"Failed to parse extracted JSON: {e}")
-                # Try to fix common JSON issues
-                # Remove trailing commas before } or ]
+            except json.JSONDecodeError:
+                # Try to fix common JSON issues: trailing commas, single quotes
                 fixed_json = re.sub(r',\s*([}\]])', r'\1', json_str)
-                # Fix single quotes to double quotes
                 fixed_json = fixed_json.replace("'", '"')
                 try:
                     enhanced_data = json.loads(fixed_json)
-                    logger.info(f"Successfully parsed fixed JSON with {len(enhanced_data)} fields")
+                    logger.debug(f"Parsed fixed JSON ({len(enhanced_data)} fields)")
                     return enhanced_data
                 except json.JSONDecodeError as e2:
-                    logger.warning(f"Failed to parse fixed JSON: {e2}")
+                    logger.warning(f"Failed to parse JSON from LLM response: {e2}")
 
         # Method 3: Fallback - return raw response for display
         logger.warning(f"Could not extract JSON from LLM response for {word}, returning raw text")

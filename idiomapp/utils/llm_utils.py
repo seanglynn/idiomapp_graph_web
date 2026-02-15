@@ -68,10 +68,10 @@ class OllamaClient(LLMClient):
         """Check if the model is available, and try to pull it if not."""
         # Check cache first to avoid repeated API calls
         if self.model_name in self._model_available_cache:
-            logger.info(f"Using cached model availability for {self.model_name}: {self._model_available_cache[self.model_name]}")
+            logger.debug(f"Using cached model availability for {self.model_name}: {self._model_available_cache[self.model_name]}")
             return self._model_available_cache[self.model_name]
-            
-        logger.info(f"Checking availability of model: {self.model_name}")
+
+        logger.debug(f"Checking availability of model: {self.model_name}")
         
         try:
             # Get list of available models
@@ -79,7 +79,7 @@ class OllamaClient(LLMClient):
             model_available = self.model_name in available_models
             
             if model_available:
-                logger.info(f"Model {self.model_name} is available")
+                logger.debug(f"Model {self.model_name} is available")
                 self._model_available_cache[self.model_name] = True
                 return True
             else:
@@ -129,9 +129,7 @@ class OllamaClient(LLMClient):
                 messages.append({"role": "system", "content": system_prompt})
             messages.append({"role": "user", "content": prompt})
 
-            logger.info(f"Generating text with Ollama model {self.model_name}")
-            logger.info(f"Prompt length: {len(prompt)} chars, System prompt: {len(system_prompt) if system_prompt else 0} chars")
-            logger.debug(f"User prompt: {prompt[:200]}...")
+            logger.debug(f"Generating text with Ollama model {self.model_name}, prompt={len(prompt)} chars")
 
             # Make API request - ollama.chat is synchronous but we wrap it for async interface
             response = ollama.chat(
@@ -152,10 +150,8 @@ class OllamaClient(LLMClient):
             else:
                 generated_text = str(response)
 
-            logger.info(f"Generated text length: {len(generated_text)}")
-            if generated_text:
-                logger.debug(f"Response preview: {generated_text[:200]}...")
-            else:
+            logger.debug(f"Generated text length: {len(generated_text)}")
+            if not generated_text:
                 logger.warning("Empty response from Ollama")
 
             return generated_text
@@ -237,8 +233,7 @@ class OpenAIClient(LLMClient):
             # Add user prompt
             messages.append({"role": "user", "content": prompt})
             
-            logger.info(f"Generating text with OpenAI model {self.model_name}")
-            logger.debug(f"Prompt: {prompt[:100]}...")
+            logger.debug(f"Generating text with OpenAI model {self.model_name}")
             
             # Prepare API request parameters
             request_params = {
@@ -270,15 +265,15 @@ class OpenAIClient(LLMClient):
             # Extract response text
             generated_text = response.choices[0].message.content or ""
             
-            logger.info(f"Generated text length: {len(generated_text)}")
+            logger.debug(f"Generated text length: {len(generated_text)}")
             logger.debug(f"Response: {generated_text[:100]}...")
-            
+
             return generated_text
-            
+
         except Exception as e:
             error_msg = str(e)
             logger.error(f"Error generating text with OpenAI: {error_msg}")
-            
+
             # Handle specific parameter errors and try fallback
             if "max_tokens" in error_msg and "max_completion_tokens" in error_msg:
                 logger.info(f"Attempting fallback with max_completion_tokens for model {self.model_name}")
@@ -289,17 +284,17 @@ class OpenAIClient(LLMClient):
                         "messages": messages,
                         "max_completion_tokens": settings.openai_max_tokens
                     }
-                    
+
                     # Only add temperature if it's supported by this model
                     model_capabilities = get_model_capabilities(self.model_name)
                     if model_capabilities.get("supports_custom_temperature", True):
                         fallback_params["temperature"] = settings.openai_temperature
-                    
+
                     response: ChatCompletion = self.client.chat.completions.create(**fallback_params)
                     generated_text = response.choices[0].message.content or ""
-                    
+
                     logger.info(f"Fallback successful with max_completion_tokens")
-                    logger.info(f"Generated text length: {len(generated_text)}")
+                    logger.debug(f"Generated text length: {len(generated_text)}")
                     logger.debug(f"Response: {generated_text[:100]}...")
                     
                     return generated_text
