@@ -1,3 +1,4 @@
+import os
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
 
@@ -131,28 +132,34 @@ class OllamaClient(LLMClient):
 
             logger.debug(f"Generating text with Ollama model {self.model_name}, prompt={len(prompt)} chars")
 
-            # Make API request - ollama.chat is synchronous but we wrap it for async interface
-            response = ollama.chat(
-                model=self.model_name,
-                messages=messages
-            )
+            # Set OLLAMA_HOST so the module-level ollama.chat() connects to the right host
+            original_host = os.environ.get("OLLAMA_HOST")
+            os.environ["OLLAMA_HOST"] = self.ollama_host
+            try:
+                response = ollama.chat(
+                    model=self.model_name,
+                    messages=messages
+                )
+            finally:
+                if original_host:
+                    os.environ["OLLAMA_HOST"] = original_host
+                elif "OLLAMA_HOST" in os.environ:
+                    del os.environ["OLLAMA_HOST"]
 
-            # Extract response text - handle different response structures
+            # Extract response text — direct key access works for both dict and Pydantic ChatResponse
             generated_text = ""
-            if isinstance(response, dict):
-                if 'message' in response and isinstance(response['message'], dict):
-                    generated_text = response['message'].get('content', '')
-                elif 'response' in response:
+            try:
+                generated_text = response['message']['content']
+            except (KeyError, TypeError):
+                try:
                     generated_text = response['response']
-                else:
-                    logger.warning(f"Unexpected response structure: {list(response.keys())}")
+                except (KeyError, TypeError):
+                    logger.warning(f"Unexpected response structure: {type(response)}")
                     generated_text = str(response)
-            else:
-                generated_text = str(response)
 
             logger.debug(f"Generated text length: {len(generated_text)}")
             if not generated_text:
-                logger.warning("Empty response from Ollama")
+                logger.info(f"Empty response from Ollama model {self.model_name}")
 
             return generated_text
 
@@ -264,9 +271,16 @@ class OpenAIClient(LLMClient):
             
             # Extract response text
             generated_text = response.choices[0].message.content or ""
-            
+
             logger.debug(f"Generated text length: {len(generated_text)}")
-            logger.debug(f"Response: {generated_text[:100]}...")
+            if not generated_text:
+                logger.info(
+                    f"Empty response from OpenAI model {self.model_name}. "
+                    f"Finish reason: {response.choices[0].finish_reason}, "
+                    f"Refusal: {getattr(response.choices[0].message, 'refusal', None)}"
+                )
+            else:
+                logger.debug(f"Response: {generated_text[:100]}...")
 
             return generated_text
 
