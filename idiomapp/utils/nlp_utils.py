@@ -2,7 +2,7 @@
 Natural Language Processing utilities.
 Uses textacy and spaCy for advanced NLP capabilities.
 """
-
+import json
 import os
 import re
 import logging
