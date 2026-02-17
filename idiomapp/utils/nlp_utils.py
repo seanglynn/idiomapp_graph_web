@@ -881,27 +881,18 @@ def build_word_cooccurrence_network(text: str, language: str, window_size: int =
         
         # Build co-occurrence network with textacy
         try:
-            # Check textacy version and use appropriate parameters
-            textacy_version = textacy.__version__
-            logger.info(f"Using textacy version: {textacy_version}")
-            
-            # Try different parameter combinations based on version compatibility
-            try:
-                # First try with term_filter (newer versions)
-                graph = build_cooccurrence_network(
-                    doc,
-                    window_size=window_size,
-                    edge_weighting="count",
-                    term_filter=term_filter
-                )
-            except TypeError:
-                # If term_filter fails, try without it (older versions)
-                logger.info("term_filter not supported, trying without it")
-                graph = build_cooccurrence_network(
-                    doc,
-                    window_size=window_size,
-                    edge_weighting="count"
-                )
+            # textacy 0.13 expects Sequence[str], not a spaCy Doc
+            terms = [token.text.lower() for token in doc if term_filter(token)]
+
+            if not terms:
+                logger.warning(f"No terms passed POS/frequency filter for {language}")
+                return _build_simple_cooccurrence_network(text, window_size, min_freq)
+
+            graph = build_cooccurrence_network(
+                terms,
+                window_size=window_size,
+                edge_weighting="count",
+            )
             
             # If graph is empty, fall back to the simple approach
             if len(graph.nodes()) == 0:
