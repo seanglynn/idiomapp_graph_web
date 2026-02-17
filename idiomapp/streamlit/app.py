@@ -1581,397 +1581,69 @@ def visualize_translation_graph(graph_data):
     # Display the enhanced network
     st.components.v1.html(enhanced_html, height=400)
 
+def _build_click_handler_js(graph_data: dict) -> str:
+    """Build the JS snippet that attaches a click handler to the PyVis network.
+
+    Injected directly after `network = new vis.Network(...)` so the
+    `network` variable is still in scope.
+    """
+    nodes_map = {
+        node["id"]: {
+            "word": node["label"],
+            "language": node.get("language", "unknown"),
+            "pos": node.get("pos", "unknown"),
+        }
+        for node in graph_data.get("nodes", [])
+    }
+    return f'''
+            var graphNodes = {json.dumps(nodes_map)};
+            network.on('click', function(params) {{
+                if (params.nodes && params.nodes.length > 0) {{
+                    var nodeData = graphNodes[params.nodes[0]];
+                    if (nodeData) {{
+                        var el = document.getElementById('word-selection-status');
+                        if (el) {{
+                            el.innerHTML = '<div style="background:#4CAF50;color:#fff;padding:10px;border-radius:5px;margin:10px 0;text-align:center;">'
+                                + '<strong>Word: ' + nodeData.word + '</strong> (' + nodeData.language + ') - ' + nodeData.pos
+                                + '<br><small>Use the dropdown below the graph to select and analyze this word.</small></div>';
+                        }}
+                    }}
+                }}
+            }});
+            '''
+
+
+_STATUS_HTML = '''
+<div id="word-selection-status" style="margin:10px 0;"></div>
+<div style="margin:10px 0;padding:10px;background:#e3f2fd;border:1px solid #2196f3;border-radius:5px;">
+  <strong>Interactive Graph:</strong> Click on any word in the graph above to select it for analysis.
+</div>
+'''
+
+
 def enhance_graph_html(html_path: str, graph_data: dict) -> str:
-    """
-    Enhance the Pyvis HTML with click functionality and analysis display.
-    
-    Args:
-        html_path: Path to the original HTML file
-        graph_data: Graph data for analysis
-        
-    Returns:
-        Enhanced HTML string
-    """
+    """Enhance PyVis HTML with a click handler and status feedback div."""
     try:
         with open(html_path, 'r', encoding='utf-8') as f:
             html_content = f.read()
-        
-        logger.info(f"Original HTML length: {len(html_content)} characters")
-        logger.info(f"HTML contains </body>: {'</body>' in html_content}")
-        
-        # Create click handler JavaScript
-        click_handler = create_click_handler(graph_data)
-        logger.info(f"Click handler length: {len(click_handler)} characters")
-        
-        # Add a simple status div for word selection feedback
-        status_div = '''
-        <div id="word-selection-status" style="margin: 10px 0;"></div>
-        <div style="margin: 10px 0; padding: 10px; background: #e3f2fd; border: 1px solid #2196f3; border-radius: 5px;">
-            <strong>🔍 Interactive Graph:</strong> Click on any word in the graph above to select it for analysis!
-        </div>
-        <div id="debug-info" style="margin: 10px 0; padding: 10px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 5px; font-size: 12px;">
-            <strong>🐛 Debug Info:</strong> Check browser console for click handler status
-            <br><button onclick="testJavaScript()" style="margin-top: 5px; padding: 5px 10px; background: #007bff; color: white; border: none; border-radius: 3px; cursor: pointer;">Test JavaScript</button>
-        </div>
-        '''
-        
-        # Insert the status div and click handler into the HTML
-        enhanced_html = html_content.replace(
-            '</body>',
-            f'{status_div}\n{click_handler}\n</body>'
-        )
-        
-        logger.info(f"Enhanced HTML length: {len(enhanced_html)} characters")
-        logger.info(f"Enhanced HTML contains click handler: {'testJavaScript' in enhanced_html}")
-        
+
+        network_init = 'network = new vis.Network(container, data, options);'
+
+        if network_init in html_content:
+            handler_js = _build_click_handler_js(graph_data)
+            enhanced_html = html_content.replace(network_init, network_init + handler_js)
+            enhanced_html = enhanced_html.replace('</body>', f'{_STATUS_HTML}\n</body>')
+            logger.debug("Injected click handler after network initialization")
+        else:
+            logger.warning("Could not find network init pattern — click handler not injected")
+            enhanced_html = html_content.replace('</body>', f'{_STATUS_HTML}\n</body>')
+
         return enhanced_html
-        
+
     except Exception as e:
         logger.error(f"Error enhancing HTML: {e}")
-        # Return original HTML if enhancement fails
         with open(html_path, 'r', encoding='utf-8') as f:
             return f.read()
-
-def create_analysis_modal() -> str:
-    """Create HTML for the analysis modal that appears when clicking nodes."""
-    return """
-    <!-- Analysis Modal -->
-    <div id="analysisModal" style="
-        display: none;
-        position: fixed;
-        z-index: 1000;
-        left: 0;
-        top: 0;
-        width: 100%;
-        height: 100%;
-        background-color: rgba(0,0,0,0.7);
-        backdrop-filter: blur(5px);
-    ">
-        <div style="
-            background: #2D2D2D;
-            margin: 5% auto;
-            padding: 20px;
-            border: 2px solid #4361EE;
-            border-radius: 15px;
-            width: 80%;
-            max-width: 600px;
-            max-height: 80vh;
-            overflow-y: auto;
-            color: white;
-            font-family: Arial, sans-serif;
-        ">
-            <div style="
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                margin-bottom: 20px;
-                border-bottom: 1px solid #444;
-                padding-bottom: 10px;
-            ">
-                <h2 id="modalTitle" style="margin: 0; color: #4CC9F0;">Word Analysis</h2>
-                <button onclick="closeAnalysisModal()" style="
-                    background: #FF3B30;
-                    color: white;
-                    border: none;
-                    border-radius: 50%;
-                    width: 30px;
-                    height: 30px;
-                    font-size: 18px;
-                    cursor: pointer;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                ">×</button>
-            </div>
-            
-            <div id="modalContent">
-                <div style="text-align: center; padding: 40px;">
-                    <div style="font-size: 48px; margin-bottom: 20px;">🔍</div>
-                    <p>Click on a word in the graph to see detailed linguistic analysis.</p>
-                </div>
-            </div>
-            
-            <div id="modalLoading" style="display: none; text-align: center; padding: 40px;">
-                <div style="font-size: 48px; margin-bottom: 20px;">⏳</div>
-                <p>Analyzing word...</p>
-            </div>
-        </div>
-    </div>
-    """
-
-def create_click_handler(graph_data: dict) -> str:
-    """Create JavaScript to handle node clicks and show analysis."""
-    # Convert graph data to JavaScript object
-    nodes_data = {}
-    for node in graph_data.get("nodes", []):
-        nodes_data[node["id"]] = {
-            "word": node["label"],
-            "language": node.get("language", "unknown"),
-            "pos": node.get("pos", "unknown")
-        }
-    
-    nodes_json = json.dumps(nodes_data)
-    
-    # Log the data being passed to JavaScript
-    logger.info(f"Creating click handler with {len(nodes_data)} nodes")
-    if nodes_data:
-        sample_items = list(nodes_data.items())[:3]
-        logger.info(f"Sample node data: {sample_items}")
-    else:
-        logger.info("No nodes data available")
-    
-    return f"""
-    <script>
-    console.log('🔍 Word analysis script loaded successfully!');
-    console.log('Script execution started at:', new Date().toISOString());
-    console.log('Graph nodes data:', {nodes_json});
-    
-    // Immediate test to verify script is running
-    (function() {{
-        console.log('🚀 Immediate function execution test - script is running!');
-        console.log('Window object available:', typeof window !== 'undefined');
-        console.log('Document object available:', typeof document !== 'undefined');
-        console.log('Current URL:', window.location.href);
-    }})();
-    
-    // Store graph data for analysis
-    const graphNodes = {nodes_json};
-    
-    // Test function to verify JavaScript is working
-    function testJavaScript() {{
-        console.log('🧪 JavaScript test function called!');
-        console.log('Graph nodes available:', Object.keys(graphNodes).length);
-        console.log('Sample node data:', Object.values(graphNodes)[0]);
-        alert('JavaScript is working! Check console for details.');
-    }}
-    
-    // Make test function globally available
-    window.testJavaScript = testJavaScript;
-    
-    // Function to handle node clicks
-    function handleNodeClick(nodeData) {{
-        console.log('Node clicked:', nodeData);
-        
-        // Show word info
-        const message = `Word: ${{nodeData.word}}\\nLanguage: ${{nodeData.language}}\\nPart of Speech: ${{nodeData.pos}}\\n\\nThis word has been selected for analysis!`;
-        alert(message);
-        
-        // Store the selected word in sessionStorage
-        sessionStorage.setItem('selectedWord', JSON.stringify(nodeData));
-        
-        // Show a visual indicator that a word was selected
-        const statusDiv = document.getElementById('word-selection-status');
-        if (statusDiv) {{
-            statusDiv.innerHTML = `
-                <div style="
-                    background: #4CAF50; 
-                    color: white; 
-                    padding: 10px; 
-                    border-radius: 5px; 
-                    margin: 10px 0;
-                    text-align: center;
-                ">
-                    ✅ <strong>${{nodeData.word}}</strong> selected for analysis!
-                </div>
-            `;
-        }}
-        
-        // Create a simple form to submit the word data to Streamlit
-        submitWordToStreamlit(nodeData);
-    }}
-    
-    // Function to submit word data to Streamlit
-    function submitWordToStreamlit(nodeData) {{
-        // Use query parameters instead of form submission (more reliable with Streamlit)
-        const currentUrl = new URL(window.location.href);
-        currentUrl.searchParams.set('word_analysis_request', JSON.stringify(nodeData));
-        window.location.href = currentUrl.toString();
-    }}
-    
-    // Wait for the page to load and then set up click handlers
-    window.addEventListener('load', function() {{
-        console.log('Page loaded, setting up click handlers...');
-        
-        // Function to set up click handlers
-        function setupClickHandlers() {{
-            console.log('Setting up click handlers...');
-            
-            // Try multiple methods to find the network
-            let network = null;
-            
-            // Method 1: Look for containers with mynetwork in ID
-            const containers = document.querySelectorAll('[id*="mynetwork"]');
-            console.log('Found containers:', containers.length);
-            
-            if (containers.length > 0) {{
-                const container = containers[0];
-                console.log('Container found:', container);
-                console.log('Container properties:', Object.getOwnPropertyNames(container));
-                console.log('Container __proto__:', Object.getOwnPropertyNames(container.__proto__));
-                
-                // Try to get network instance
-                if (container.__vis_network) {{
-                    network = container.__vis_network;
-                    console.log('Network found via __vis_network');
-                }} else if (container.vis_network) {{
-                    network = container.vis_network;
-                    console.log('Network found via vis_network');
-                }} else if (container.network) {{
-                    network = container.network;
-                    console.log('Network found via network');
-                }}
-                
-                // Method 1.5: Check all properties for network-like objects
-                for (const prop of Object.getOwnPropertyNames(container)) {{
-                    if (prop.includes('network') || prop.includes('vis')) {{
-                        console.log('Found potential network property:', prop, container[prop]);
-                    }}
-                }}
-            }}
-            
-            // Method 2: Look for global network variable
-            if (!network && typeof window.vis_network !== 'undefined') {{
-                network = window.vis_network;
-                console.log('Network found via global vis_network');
-            }}
-            
-            // Method 3: Look for any element with vis-network class
-            if (!network) {{
-                const visElements = document.querySelectorAll('.vis-network');
-                if (visElements.length > 0) {{
-                    const visElement = visElements[0];
-                    if (visElement.__vis_network) {{
-                        network = visElement.__vis_network;
-                        console.log('Network found via vis-network class');
-                    }}
-                }}
-            }}
-            
-            // Method 4: Look for any element with data-id containing "mynetwork"
-            if (!network) {{
-                const networkElements = document.querySelectorAll('[data-id*="mynetwork"]');
-                console.log('Found elements with data-id containing mynetwork:', networkElements.length);
-                if (networkElements.length > 0) {{
-                    const element = networkElements[0];
-                    console.log('Element properties:', Object.getOwnPropertyNames(element));
-                    if (element.__vis_network) {{
-                        network = element.__vis_network;
-                        console.log('Network found via data-id element');
-                    }}
-                }}
-            }}
-            
-            // Method 5: Check all global variables for network objects
-            if (!network) {{
-                console.log('Checking global variables for network objects...');
-                for (const key in window) {{
-                    if (key.includes('network') || key.includes('vis')) {{
-                        console.log('Found global variable:', key, window[key]);
-                    }}
-                }}
-            }}
-            
-            if (network) {{
-                console.log('Network found, setting up click handler');
-                
-                // Add click event listener
-                network.on('click', function(params) {{
-                    console.log('Network click event:', params);
-                    if (params.nodes && params.nodes.length > 0) {{
-                        const nodeId = params.nodes[0];
-                        console.log('Node ID clicked:', nodeId);
-                        const nodeData = graphNodes[nodeId];
-                        if (nodeData) {{
-                            console.log('Node data found:', nodeData);
-                            handleNodeClick(nodeData);
-                        }} else {{
-                            console.log('No node data found for ID:', nodeId);
-                        }}
-                    }}
-                }});
-                
-                console.log('Click handler attached successfully');
-                return true;
-            }} else {{
-                console.log('Network not found, will retry...');
-                return false;
-            }}
-        }}
-        
-        // Try to set up handlers immediately
-        if (!setupClickHandlers()) {{
-            // If not ready, retry with increasing delays
-            const retryDelays = [500, 1000, 2000, 3000];
-            retryDelays.forEach((delay, index) => {{
-                setTimeout(() => {{
-                    console.log(`Retry ${{index + 1}} after ${{delay}}ms`);
-                    if (setupClickHandlers()) {{
-                        console.log('Click handlers successfully set up on retry');
-                    }}
-                }}, delay);
-            }});
-        }}
-    }});
-    
-    // Add visual feedback for clickable nodes and fallback click handlers
-    window.addEventListener('load', function() {{
-        setTimeout(function() {{
-            const nodes = document.querySelectorAll('.vis-node');
-            console.log('Found vis nodes:', nodes.length);
-            nodes.forEach(node => {{
-                node.style.cursor = 'pointer';
-                node.title = 'Click to analyze this word';
-                
-                // Add fallback click handler directly to DOM elements
-                node.addEventListener('click', function(e) {{
-                    e.preventDefault();
-                    e.stopPropagation();
-                    console.log('Fallback click handler triggered');
-                    
-                    // Try to extract node ID from the element
-                    const nodeId = this.getAttribute('data-id') || this.id;
-                    if (nodeId && graphNodes[nodeId]) {{
-                        console.log('Fallback: Node data found for ID:', nodeId);
-                        handleNodeClick(graphNodes[nodeId]);
-                    }} else {{
-                        console.log('Fallback: No node data found, trying to find by position');
-                        // Try to find node by position or other attributes
-                        const nodeText = this.textContent || this.innerText;
-                        if (nodeText) {{
-                            // Find node by label
-                            for (const id in graphNodes) {{
-                                const data = graphNodes[id];
-                                if (data.word === nodeText.trim()) {{
-                                    console.log('Fallback: Found node by text:', nodeText);
-                                    handleNodeClick(data);
-                                    break;
-                                }}
-                            }}
-                        }}
-                    }}
-                }});
-            }});
-        }}, 1500);
-        
-        // Additional fallback: Listen for clicks on the entire graph area
-        setTimeout(function() {{
-            const graphArea = document.querySelector('.vis-network') || document.querySelector('[id*="mynetwork"]');
-            if (graphArea) {{
-                console.log('Setting up graph area click listener');
-                graphArea.addEventListener('click', function(e) {{
-                    // Only handle if we clicked on a node (not the background)
-                    if (e.target.classList.contains('vis-node') || e.target.closest('.vis-node')) {{
-                        console.log('Graph area click on node detected');
-                        // The node click handler should have already handled this
-                        return;
-                    }}
-                    console.log('Graph area background click');
-                }});
-            }}
-        }}, 2000);
-    }});
-    </script>
-    """
 
 def adjust_color(hex_color, amount):
     """Adjust a hex color by lightening or darkening it"""
@@ -2657,210 +2329,451 @@ def handle_translation_error(error_message: str, source_lang: str, target_lang: 
     
     return f"⚠️ Unable to translate to {LANGUAGE_MAP.get(target_lang, {}).get('name', target_lang)}. Please try again."
 
+def _badge(text: str, color: str) -> str:
+    """Return an HTML badge span, or empty string if text is falsy."""
+    if not text:
+        return ""
+    return (f'<span style="background:{color};color:#fff;'
+            f'padding:2px 10px;border-radius:12px;font-size:13px;">{text}</span>')
+
+
+def _as_list(data: dict, key: str, *, limit: int = 8) -> list[str]:
+    """Normalize data[key] to a list of strings, truncated to *limit*."""
+    val = data.get(key)
+    if not val:
+        return []
+    items = val if isinstance(val, list) else [val]
+    return [str(x) for x in items[:limit]]
+
+
 def display_word_analysis(word: str, language: str, analysis_data: dict):
-    """
-    Display detailed linguistic analysis of a word in an attractive format.
-    
-    Args:
-        word: The word being analyzed
-        language: Language code
-        analysis_data: Linguistic analysis data from analyze_word_linguistics
-    """
+    """Display detailed linguistic analysis of a word in a compact, visual layout."""
     lang_name = LANGUAGE_MAP.get(language, {}).get("name", language.title())
-    
-    # Create a beautiful header
+
+    # Merge nested grammar/pronunciation into top level for uniform access
+    grammar_data = analysis_data.get("grammar", {}) if isinstance(analysis_data.get("grammar"), dict) else {}
+    for key, value in grammar_data.items():
+        if key not in analysis_data:
+            analysis_data[key] = value
+
+    pron_data = analysis_data.get("pronunciation", {}) if isinstance(analysis_data.get("pronunciation"), dict) else {}
+
+    # ── Compact header bar ──────────────────────────────────────────────────
+    pos = analysis_data.get("pos", "")
+    definition = analysis_data.get("definition", "")
+    ipa = analysis_data.get("ipa") or pron_data.get("ipa", "")
+
+    badges = (_badge(pos, "#4361EE")
+              + _badge(analysis_data.get("register", ""), "#2ECC71")
+              + _badge(analysis_data.get("frequency", ""), "#F39C12"))
+    ipa_html = f'<span style="color:#aaa;font-size:14px;font-style:italic;">/{ipa}/</span>' if ipa else ""
+    def_html = f'<p style="color:#ccc;margin:10px 0 0;font-size:14px;">{definition}</p>' if definition else ""
+
     st.markdown(f"""
-    <div style="background: linear-gradient(90deg, #4361EE, #4CC9F0); padding: 20px; border-radius: 10px; margin: 20px 0;">
-        <h2 style="color: white; margin: 0; text-align: center;">
-            🔍 Linguistic Analysis: <strong>{word}</strong> ({lang_name})
-        </h2>
+    <div style="background:linear-gradient(135deg,#1a1a2e,#16213e);border:1px solid #4361EE;
+                padding:16px 20px;border-radius:12px;margin-bottom:16px;">
+      <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;">
+        <span style="font-size:28px;font-weight:bold;color:#fff;">{word}</span>
+        <span style="color:#aaa;font-size:14px;">{lang_name}</span>
+        {ipa_html}
+      </div>
+      <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;">{badges}</div>
+      {def_html}
     </div>
     """, unsafe_allow_html=True)
-    
-    # Basic information
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.metric("Part of Speech", analysis_data.get("pos", "Unknown"))
-        if "lemma" in analysis_data and analysis_data["lemma"] != word:
-            st.metric("Base Form", analysis_data["lemma"])
-    
-    with col2:
-        if "tag" in analysis_data:
-            st.metric("Detailed Tag", analysis_data["tag"])
-        if "dep" in analysis_data:
-            st.metric("Dependency", analysis_data["dep"])
-    
-    with col3:
-        if "is_stop" in analysis_data:
-            st.metric("Stop Word", "Yes" if analysis_data["is_stop"] else "No")
-        if "is_entity" in analysis_data and analysis_data["is_entity"]:
-            st.metric("Entity Type", analysis_data.get("entity_type", "Unknown"))
-    
-    # Enhanced LLM analysis
-    if any(key in analysis_data for key in ["infinitive", "conjugations", "gender", "examples", "synonyms"]):
-        st.markdown("### 🧠 LLM-Enhanced Analysis")
-        
-        # Handle different parts of speech
-        if analysis_data.get("pos") == "VERB":
-            _display_verb_analysis(analysis_data)
-        elif analysis_data.get("pos") == "NOUN":
-            _display_noun_analysis(analysis_data)
-        elif analysis_data.get("pos") == "ADJ":
-            _display_adjective_analysis(analysis_data)
-        else:
-            _display_generic_analysis(analysis_data)
-    
-    # Raw analysis data (collapsible)
-    with st.expander("🔧 Raw Analysis Data", expanded=False):
+
+    # ── LLM error notice (compact) ───────────────────────────────────────────
+    if "llm_error" in analysis_data:
+        st.warning(f"LLM unavailable — showing basic data only. ({analysis_data['llm_error']})")
+        with st.expander("🔧 Raw Data", expanded=False):
+            st.json(analysis_data)
+        return
+
+    # ── Two-column layout: graph left, tabbed panels right ──────────────────
+    graph_col, panels_col = st.columns([1, 1], gap="medium")
+
+    with graph_col:
+        st.caption("🕸️ Knowledge Graph — drag nodes, hover for details")
+        _display_word_knowledge_graph(word, language, analysis_data)
+
+    with panels_col:
+        _display_analysis_panels(word, language, analysis_data, pron_data)
+
+    # Raw data at the very bottom, collapsed
+    with st.expander("🔧 Raw Data", expanded=False):
         st.json(analysis_data)
 
-def _display_verb_analysis(analysis_data: dict):
+
+def _render_origins_tab(d: dict, _pron: dict):
+    """Render the Origins tab content."""
+    if "etymology" in d:
+        st.markdown(f"**Origin:** {d['etymology']}")
+    if "language_origin" in d:
+        st.markdown(f"**Source language:** {d['language_origin']}")
+    if "root" in d:
+        st.markdown(f"**Root:** `{d['root']}`")
+    if "historical_evolution" in d:
+        st.caption(d["historical_evolution"])
+    if "cognates" in d:
+        cognates = d["cognates"]
+        st.markdown("**Cognates in other languages:**")
+        if isinstance(cognates, dict):
+            for lang, cog in cognates.items():
+                st.markdown(f"  - {lang}: **{cog}**")
+        else:
+            st.markdown("  " + " / ".join(f"**{c}**" for c in _as_list(d, "cognates")))
+
+
+def _render_meaning_tab(d: dict, _pron: dict):
+    """Render the Meaning tab content."""
+    col1, col2 = st.columns(2)
+    with col1:
+        if "synonyms" in d:
+            st.markdown("**Synonyms**")
+            for s in _as_list(d, "synonyms"):
+                st.markdown(f"  - {s}")
+        if "hypernym" in d:
+            st.markdown(f"**Broader:** {d['hypernym']}")
+    with col2:
+        if "antonyms" in d:
+            st.markdown("**Antonyms**")
+            for a in _as_list(d, "antonyms"):
+                st.markdown(f"  - {a}")
+        if "hyponyms" in d:
+            st.markdown(f"**Specific:** {', '.join(_as_list(d, 'hyponyms', limit=5))}")
+    if "semantic_field" in d:
+        st.caption("Related concept words: " + " / ".join(_as_list(d, "semantic_field")))
+
+
+def _render_grammar_tab(d: dict, _pron: dict):
+    """Render the Grammar tab content with POS-specific logic."""
+    pos = d.get("pos", "")
+    if pos == "VERB":
+        _display_verb_analysis(d)
+    elif pos == "NOUN":
+        _display_noun_analysis(d)
+    elif pos == "ADJ":
+        _display_adjective_analysis(d)
+    else:
+        _display_generic_analysis(d)
+    if "grammar_notes" in d:
+        st.caption(f"📖 {d['grammar_notes']}")
+
+
+def _render_usage_tab(d: dict, _pron: dict):
+    """Render the Usage tab content."""
+    for i, ex in enumerate(_as_list(d, "examples", limit=5), 1):
+        st.markdown(f"{i}. *{ex}*")
+    collocs = _as_list(d, "collocations", limit=10)
+    if collocs:
+        st.markdown("**Common collocations:** " + " / ".join(f"`{c}`" for c in collocs))
+    if "regional_variations" in d:
+        st.info(f"🌍 {d['regional_variations']}")
+
+
+def _render_idioms_tab(d: dict, _pron: dict):
+    """Render the Idioms tab content."""
+    if "idioms" in d:
+        idioms = d["idioms"]
+        if isinstance(idioms, dict):
+            for expr, meaning in list(idioms.items())[:6]:
+                st.markdown(f"*{expr}* — {meaning}")
+        else:
+            for item in _as_list(d, "idioms", limit=6):
+                st.markdown(f"- *{item}*")
+    for p in _as_list(d, "proverbs", limit=3):
+        st.markdown(f"- *{p}*")
+    if "slang_usage" in d:
+        st.caption(f"🗣️ Slang: {d['slang_usage']}")
+
+
+def _render_tips_tab(d: dict, _pron: dict):
+    """Render the Tips tab content."""
+    if "cultural_notes" in d:
+        st.info(d["cultural_notes"])
+    if "false_friends" in d:
+        ff = d["false_friends"]
+        if isinstance(ff, list):
+            ff_str = ", ".join(ff)
+        elif isinstance(ff, dict):
+            ff_str = ", ".join(f"{k}: {v}" for k, v in ff.items())
+        else:
+            ff_str = str(ff)
+        st.warning(f"⚠️ False friends: {ff_str}")
+    for m in _as_list(d, "common_mistakes"):
+        st.error(f"  ✗ {m}", icon=None)
+    for t in _as_list(d, "tips", limit=4):
+        st.success(f"💡 {t}")
+
+
+def _render_sound_tab(d: dict, pron: dict):
+    """Render the Sound tab content."""
+    ipa = d.get("ipa") or pron.get("ipa")
+    syllables = d.get("syllables") or pron.get("syllables")
+    stress = d.get("stress") or pron.get("stress")
+    notes = d.get("pronunciation_notes") or pron.get("pronunciation_notes")
+    if ipa:
+        st.markdown(f"**IPA:** `/{ipa}/`")
+    if syllables:
+        st.markdown(f"**Syllables:** {syllables}")
+    if stress:
+        st.markdown(f"**Stress:** {stress}")
+    if notes:
+        st.caption(notes)
+
+
+# Tab configuration: (label, required_keys, render_function)
+_TAB_DEFS = [
+    ("📜 Origins",  ["etymology", "root", "language_origin", "cognates"],                          _render_origins_tab),
+    ("🔗 Meaning",  ["synonyms", "antonyms", "semantic_field", "hypernym"],                        _render_meaning_tab),
+    ("📝 Grammar",  ["infinitive", "conjugations", "gender", "plural", "gender_forms",
+                      "comparison", "verb_type"],                                                    _render_grammar_tab),
+    ("💬 Usage",    ["examples", "collocations", "regional_variations"],                            _render_usage_tab),
+    ("🎭 Idioms",   ["idioms", "proverbs", "slang_usage"],                                         _render_idioms_tab),
+    ("📚 Tips",     ["cultural_notes", "false_friends", "common_mistakes", "tips"],                 _render_tips_tab),
+    ("🔊 Sound",    ["ipa", "syllables", "stress"],                                                _render_sound_tab),
+]
+
+
+def _display_analysis_panels(word: str, language: str, analysis_data: dict, pron_data: dict):
+    """Render tabbed detail panels, showing only tabs that have data."""
+    active = [
+        (label, fn)
+        for label, keys, fn in _TAB_DEFS
+        if any(k in analysis_data for k in keys) or (fn is _render_sound_tab and pron_data)
+    ]
+    if not active:
+        st.info("No detailed data available — the LLM may not have returned structured results.")
+        return
+
+    tabs = st.tabs([label for label, _ in active])
+    for tab, (_, render_fn) in zip(tabs, active):
+        with tab:
+            render_fn(analysis_data, pron_data)
+
+
+def _normalize_items(val) -> list[str]:
+    """Normalize a value from analysis data into a flat list of display strings."""
+    if not val:
+        return []
+    if isinstance(val, dict):
+        return [f"{k}: {v}" for k, v in val.items()]
+    if isinstance(val, list):
+        return [str(x) for x in val]
+    return [str(val)]
+
+
+# Graph category config: (data_key, label, color)
+_GRAPH_CATEGORIES = [
+    ("cognates",     "🌍 Cognates",     "#E91E63"),
+    ("synonyms",     "≈ Synonyms",      "#3498DB"),
+    ("antonyms",     "≠ Antonyms",      "#E74C3C"),
+    ("idioms",       "🎭 Idioms",       "#F39C12"),
+    ("collocations", "🔗 Collocations", "#00BCD4"),
+]
+
+_GRAPH_OPTIONS = """{
+  "nodes":       {"borderWidth": 2, "shadow": true,
+                  "font": {"size": 14, "face": "Arial", "color": "#FAFAFA"}},
+  "edges":       {"color": {"inherit": false},
+                  "smooth": {"enabled": true, "type": "dynamic"}, "width": 2},
+  "physics":     {"enabled": true,
+                  "barnesHut": {"gravitationalConstant": -3000, "centralGravity": 0.3,
+                                "springLength": 150, "springConstant": 0.04},
+                  "stabilization": {"iterations": 150}},
+  "interaction": {"hover": true, "tooltipDelay": 100, "navigationButtons": true}
+}"""
+
+
+def _display_word_knowledge_graph(word: str, language: str, analysis_data: dict):
+    """Create and display an interactive knowledge graph for the word analysis."""
+    from pyvis.network import Network
+    import tempfile
+    import os
+
+    net = Network(height="450px", width="100%", bgcolor="#0E1117", font_color="#FAFAFA")
+    net.barnes_hut()
+    net.set_options(_GRAPH_OPTIONS)
+
+    # Central word node
+    pos = analysis_data.get("pos", "UNKNOWN")
+    net.add_node("main", label=word,
+                 title=f"{word}\n{pos}\nLanguage: {language}",
+                 color="#FF6B6B", size=50,
+                 font={"size": 20, "color": "#FFFFFF", "bold": True},
+                 shape="circle")
+
+    node_id = 0
+
+    def add_category(cat_id: str, label: str, color: str, items: list[str]):
+        """Add a hub node with child nodes radiating from it."""
+        nonlocal node_id
+        if not items:
+            return
+        hub = f"cat_{cat_id}"
+        net.add_node(hub, label=label, title=label, color=color, size=30, shape="diamond")
+        net.add_edge("main", hub, color=color, width=3)
+        for item in items[:8]:
+            node_id += 1
+            display = item[:27] + "..." if len(item) > 30 else item
+            net.add_node(f"item_{node_id}", label=display, title=item,
+                         color=color, size=20, shape="dot")
+            net.add_edge(hub, f"item_{node_id}", color=color, width=1)
+
+    # Etymology — special case with sub-nodes for origin & root
+    etym_color = "#9B59B6"
+    if "etymology" in analysis_data:
+        net.add_node("etymology", label="📜 Etymology",
+                     title=analysis_data["etymology"],
+                     color=etym_color, size=30, shape="diamond")
+        net.add_edge("main", "etymology", color=etym_color, width=3)
+        for sub_key, prefix in [("language_origin", "Origin"), ("root", "Root")]:
+            if sub_key in analysis_data:
+                node_id += 1
+                label = f"{prefix}: {analysis_data[sub_key]}" if sub_key == "root" else analysis_data[sub_key]
+                net.add_node(f"{sub_key}_{node_id}", label=label,
+                             title=f"{prefix}: {analysis_data[sub_key]}",
+                             color=etym_color, size=20)
+                net.add_edge("etymology", f"{sub_key}_{node_id}", color=etym_color)
+
+    # Standard categories — uniform loop
+    for key, label, color in _GRAPH_CATEGORIES:
+        items = _normalize_items(analysis_data.get(key))
+        if items:
+            add_category(key, label, color, items)
+
+    # Conjugations — dict needs special formatting
+    grammar_data = analysis_data.get("grammar", {}) if isinstance(analysis_data.get("grammar"), dict) else {}
+    conj = analysis_data.get("conjugations") or grammar_data.get("conjugations")
+    if conj and isinstance(conj, dict):
+        add_category("conjugations", "📝 Conjugations", "#2ECC71",
+                     [f"{t}: {f}" for t, f in list(conj.items())[:6]])
+
+    # Examples — truncate long strings
+    examples = analysis_data.get("examples", [])
+    if isinstance(examples, list) and examples:
+        short = [ex[:40] + "..." if len(ex) > 40 else ex for ex in examples[:4]]
+        add_category("examples", "💬 Examples", "#1ABC9C", short)
+
+    # Forms — gathered from multiple keys
+    forms = []
+    for fkey, flabel in [("plural", "Plural"), ("gender", "Gender"),
+                          ("infinitive", "Infinitive"), ("verb_type", "Verb type")]:
+        val = analysis_data.get(fkey) or grammar_data.get(fkey)
+        if val:
+            forms.append(f"{flabel}: {val}")
+    for dict_key in ("gender_forms", "related_forms"):
+        sub = analysis_data.get(dict_key, {})
+        if isinstance(sub, dict):
+            forms.extend(f"{k}: {v}" for k, v in sub.items())
+    if forms:
+        add_category("forms", "📋 Forms", "#4CAF50", forms)
+
+    # Render to HTML
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.html', mode='w') as f:
+        net.save_graph(f.name)
+        temp_path = f.name
+    with open(temp_path, 'r', encoding='utf-8') as f:
+        html_content = f.read()
+    os.unlink(temp_path)
+
+    st.info("💡 **Interactive Graph:** Click and drag nodes to explore. Hover for details. Use mouse wheel to zoom.")
+    st.components.v1.html(html_content, height=500)
+
+def _show_dict_items(d: dict, key: str, heading: str):
+    """Render a dict field as a titled list of 'Key: Value' lines."""
+    val = d.get(key)
+    if not val:
+        return
+    st.markdown(f"**{heading}:**")
+    if isinstance(val, dict):
+        for k, v in val.items():
+            st.markdown(f"- **{k.title()}:** {v}")
+    else:
+        for item in _as_list(d, key):
+            st.markdown(f"- {item}")
+
+
+def _show_examples(d: dict):
+    """Render numbered usage examples."""
+    items = _as_list(d, "examples", limit=5)
+    if items:
+        st.markdown("**Usage Examples:**")
+        for i, ex in enumerate(items, 1):
+            st.markdown(f"{i}. {ex}")
+
+
+def _display_verb_analysis(d: dict):
     """Display verb-specific analysis."""
     col1, col2 = st.columns(2)
-    
     with col1:
-        if "infinitive" in analysis_data:
-            st.markdown(f"**Infinitive:** {analysis_data['infinitive']}")
-        if "verb_type" in analysis_data:
-            st.markdown(f"**Verb Type:** {analysis_data['verb_type']}")
-        
-        if "conjugations" in analysis_data:
-            st.markdown("**Key Conjugations:**")
-            for tense, forms in analysis_data["conjugations"].items():
-                if isinstance(forms, list):
-                    st.markdown(f"- **{tense.title()}:** {', '.join(forms)}")
-                else:
-                    st.markdown(f"- **{tense.title()}:** {forms}")
-    
+        if "infinitive" in d:
+            st.markdown(f"**Infinitive:** {d['infinitive']}")
+        if "verb_type" in d:
+            st.markdown(f"**Verb Type:** {d['verb_type']}")
+        _show_dict_items(d, "conjugations", "Key Conjugations")
     with col2:
-        if "related_forms" in analysis_data:
-            st.markdown("**Related Forms:**")
-            for form_type, form in analysis_data["related_forms"].items():
-                st.markdown(f"- **{form_type.title()}:** {form}")
-        
-        if "synonyms" in analysis_data:
+        _show_dict_items(d, "related_forms", "Related Forms")
+        if "synonyms" in d:
             st.markdown("**Synonyms:**")
-            if isinstance(analysis_data["synonyms"], list):
-                for syn in analysis_data["synonyms"]:
-                    st.markdown(f"- {syn}")
-            else:
-                st.markdown(f"- {analysis_data['synonyms']}")
-    
-    # Examples
-    if "examples" in analysis_data:
-        st.markdown("**Usage Examples:**")
-        if isinstance(analysis_data["examples"], list):
-            for i, example in enumerate(analysis_data["examples"], 1):
-                st.markdown(f"{i}. {example}")
-        else:
-            st.markdown(f"1. {analysis_data['examples']}")
-    
-    # Grammar notes
-    if "grammar_notes" in analysis_data:
-        st.info(f"**Grammar Notes:** {analysis_data['grammar_notes']}")
+            for s in _as_list(d, "synonyms"):
+                st.markdown(f"- {s}")
+    _show_examples(d)
+    if "grammar_notes" in d:
+        st.info(f"**Grammar Notes:** {d['grammar_notes']}")
 
-def _display_noun_analysis(analysis_data: dict):
+
+def _display_noun_analysis(d: dict):
     """Display noun-specific analysis."""
     col1, col2 = st.columns(2)
-    
     with col1:
-        if "gender" in analysis_data:
-            st.markdown(f"**Gender:** {analysis_data['gender']}")
-        if "plural" in analysis_data:
-            st.markdown(f"**Plural:** {analysis_data['plural']}")
-        if "articles" in analysis_data:
-            st.markdown("**Articles:**")
-            articles = analysis_data["articles"]
-            if isinstance(articles, dict):
-                for article_type, article in articles.items():
-                    st.markdown(f"- **{article_type.title()}:** {article}")
-    
+        if "gender" in d:
+            st.markdown(f"**Gender:** {d['gender']}")
+        if "plural" in d:
+            st.markdown(f"**Plural:** {d['plural']}")
+        _show_dict_items(d, "articles", "Articles")
     with col2:
-        if "related_forms" in analysis_data:
-            st.markdown("**Related Forms:**")
-            forms = analysis_data["related_forms"]
-            if isinstance(forms, dict):
-                for form_type, form in forms.items():
-                    st.markdown(f"- **{form_type.title()}:** {form}")
-        
-        if "synonyms" in analysis_data:
+        _show_dict_items(d, "related_forms", "Related Forms")
+        if "synonyms" in d:
             st.markdown("**Synonyms:**")
-            if isinstance(analysis_data["synonyms"], list):
-                for syn in analysis_data["synonyms"]:
-                    st.markdown(f"- {syn}")
-    
-    # Examples and cultural notes
-    if "examples" in analysis_data:
-        st.markdown("**Usage Examples:**")
-        if isinstance(analysis_data["examples"], list):
-            for i, example in enumerate(analysis_data["examples"], 1):
-                st.markdown(f"{i}. {example}")
-    
-    if "cultural_notes" in analysis_data:
-        st.info(f"**Cultural Notes:** {analysis_data['cultural_notes']}")
+            for s in _as_list(d, "synonyms"):
+                st.markdown(f"- {s}")
+    _show_examples(d)
+    if "cultural_notes" in d:
+        st.info(f"**Cultural Notes:** {d['cultural_notes']}")
 
-def _display_adjective_analysis(analysis_data: dict):
+
+def _display_adjective_analysis(d: dict):
     """Display adjective-specific analysis."""
     col1, col2 = st.columns(2)
-    
     with col1:
-        if "gender_forms" in analysis_data:
-            st.markdown("**Gender Forms:**")
-            forms = analysis_data["gender_forms"]
-            if isinstance(forms, dict):
-                for gender, form in forms.items():
-                    st.markdown(f"- **{gender.title()}:** {form}")
-        
-        if "comparison" in analysis_data:
-            st.markdown("**Comparison Forms:**")
-            comparison = analysis_data["comparison"]
-            if isinstance(comparison, dict):
-                for comp_type, form in comparison.items():
-                    st.markdown(f"- **{comp_type.title()}:** {form}")
-    
+        _show_dict_items(d, "gender_forms", "Gender Forms")
+        _show_dict_items(d, "comparison", "Comparison Forms")
     with col2:
-        if "synonyms" in analysis_data:
+        if "synonyms" in d:
             st.markdown("**Synonyms:**")
-            if isinstance(analysis_data["synonyms"], list):
-                for syn in analysis_data["synonyms"]:
-                    st.markdown(f"- {syn}")
-        
-        if "antonyms" in analysis_data:
+            for s in _as_list(d, "synonyms"):
+                st.markdown(f"- {s}")
+        if "antonyms" in d:
             st.markdown("**Antonyms:**")
-            if isinstance(analysis_data["antonyms"], list):
-                for ant in analysis_data["antonyms"]:
-                    st.markdown(f"- {ant}")
-    
-    # Examples and position rules
-    if "examples" in analysis_data:
-        st.markdown("**Usage Examples:**")
-        if isinstance(analysis_data["examples"], list):
-            for i, example in enumerate(analysis_data["examples"], 1):
-                st.markdown(f"{i}. {example}")
-    
-    if "position" in analysis_data:
-        st.info(f"**Position Rule:** {analysis_data['position']}")
+            for a in _as_list(d, "antonyms"):
+                st.markdown(f"- {a}")
+    _show_examples(d)
+    if "position" in d:
+        st.info(f"**Position Rule:** {d['position']}")
 
-def _display_generic_analysis(analysis_data: dict):
+
+def _display_generic_analysis(d: dict):
     """Display generic analysis for other parts of speech."""
-    if "definition" in analysis_data:
-        st.markdown(f"**Definition:** {analysis_data['definition']}")
-    
-    if "related_words" in analysis_data:
+    if "definition" in d:
+        st.markdown(f"**Definition:** {d['definition']}")
+    if "related_words" in d:
         st.markdown("**Related Words:**")
-        if isinstance(analysis_data["related_words"], list):
-            for word in analysis_data["related_words"]:
-                st.markdown(f"- {word}")
-    
-    if "examples" in analysis_data:
-        st.markdown("**Usage Examples:**")
-        if isinstance(analysis_data["examples"], list):
-            for i, example in enumerate(analysis_data["examples"], 1):
-                st.markdown(f"{i}. {example}")
-    
-    if "grammar_notes" in analysis_data:
-        st.info(f"**Grammar Notes:** {analysis_data['grammar_notes']}")
+        for w in _as_list(d, "related_words"):
+            st.markdown(f"- {w}")
+    _show_examples(d)
+    if "grammar_notes" in d:
+        st.info(f"**Grammar Notes:** {d['grammar_notes']}")
 
 async def analyze_selected_word(word: str, language: str, client):
     """
@@ -2880,12 +2793,6 @@ async def analyze_selected_word(word: str, language: str, client):
     except Exception as e:
         logger.error(f"Error analyzing word {word}: {e}")
         return {"error": f"Analysis failed: {str(e)}"}
-
-def add_message_handler():
-    """Add a message handler to receive analysis requests from the graph."""
-    # This is a placeholder for now - in a real implementation, we'd need to
-    # use Streamlit's component communication or a different approach
-    pass
 
 def main():
     # Initialize session state for help page if not exists
@@ -2936,27 +2843,6 @@ def main():
     # Initialize graph storage
     if "graph_storage" not in st.session_state:
         st.session_state.graph_storage = get_graph_storage()
-    
-    # Handle word analysis requests from graph clicks
-    if "word_analysis_request" in st.query_params:
-        try:
-            st.write("🔍 **Debug**: Received word analysis request!")
-            word_data = json.loads(st.query_params["word_analysis_request"])
-            st.write(f"🔍 **Debug**: Word data: {word_data}")
-            
-            st.session_state["selected_word_from_graph"] = {
-                "word": word_data.get("word", ""),
-                "language": word_data.get("language", ""),
-                "pos": word_data.get("pos", "")
-            }
-            st.write(f"🔍 **Debug**: Stored in session state: {st.session_state['selected_word_from_graph']}")
-            
-            # Clear the query param to avoid reprocessing
-            st.query_params.clear()
-            st.rerun()
-        except Exception as e:
-            st.error(f"Error processing word selection: {e}")
-            st.write(f"🔍 **Debug**: Exception details: {str(e)}")
     
     # Now get LLM provider and model from properly initialized session state
     llm_provider = st.session_state["llm_provider"]
@@ -3624,20 +3510,6 @@ def main():
                 st.markdown(f"**Semantic network for {get_language_display(selected_lang)}**")
                 visualize_translation_graph(graph_data)
                 
-            # Debug section for troubleshooting
-            with st.expander("🐛 Debug Graph Data", expanded=False):
-                st.write("**Current Graph Data:**")
-                if st.session_state["graph_data"]:
-                    for lang, data in st.session_state["graph_data"].items():
-                        st.write(f"**{lang}**: {len(data.get('nodes', []))} nodes, {len(data.get('edges', []))} edges")
-                        if data.get('nodes'):
-                            st.write(f"Sample nodes: {[n.get('label', '') for n in data['nodes'][:5]]}")
-                else:
-                    st.write("No graph data available")
-                
-                st.write("**Session State Keys:**")
-                st.write(list(st.session_state.keys()))
-                
             # Add a legend explaining the graph
             with st.expander("📊 Graph Legend", expanded=False):
                 legend_col1, legend_col2, legend_col3 = st.columns(3)
@@ -3679,68 +3551,116 @@ def main():
             # Word Analysis Section
             st.markdown("---")
             st.markdown("### 🔍 Word Analysis")
-            
-            # Check if we have a selected word from the graph
-            if "selected_word_from_graph" in st.session_state:
-                selected_word_data = st.session_state["selected_word_from_graph"]
-                word = selected_word_data.get("word", "")
-                language = selected_word_data.get("language", "")
-                pos = selected_word_data.get("pos", "")
-                
-                st.success(f"**Selected Word**: {word} ({language}) - {pos}")
-                
-                # Analyze button
-                if st.button("🔍 Analyze Selected Word", type="primary"):
-                    if st.session_state.get("model_available", False):
-                        with st.spinner(f"Analyzing '{word}' using LLM..."):
-                            # Get the LLM client
-                            api_key = None
-                            organization = None
-                            if st.session_state["llm_provider"] == "openai":
-                                api_key = st.session_state.get("openai_api_key")
-                                organization = st.session_state.get("openai_organization")
-                            
-                            client = LLMClient.create(
-                                provider=st.session_state["llm_provider"], 
-                                model_name=st.session_state["model_name"],
-                                api_key=api_key,
-                                organization=organization
-                            )
-                            
-                            # Run the analysis
-                            loop = asyncio.new_event_loop()
-                            asyncio.set_event_loop(loop)
-                            try:
-                                analysis_data = loop.run_until_complete(
-                                    analyze_selected_word(word, language, client)
-                                )
-                                # Store the analysis for display
-                                st.session_state["current_word_analysis"] = analysis_data
-                                st.session_state["current_word"] = word
-                                st.session_state["current_word_lang"] = language
-                                st.rerun()
-                            finally:
-                                loop.close()
-                    else:
-                        st.error("⚠️ LLM model not available. Please check the model status above.")
-                
-                # Display analysis if available
-                if "current_word_analysis" in st.session_state and st.session_state.get("current_word") == word:
-                    analysis_data = st.session_state["current_word_analysis"]
-                    if "error" not in analysis_data:
-                        display_word_analysis(word, language, analysis_data)
-                    else:
-                        st.error(f"Analysis failed: {analysis_data['error']}")
-                
-                # Clear selection button
-                if st.button("🗑️ Clear Selection"):
-                    if "selected_word_from_graph" in st.session_state:
-                        del st.session_state["selected_word_from_graph"]
-                    if "current_word_analysis" in st.session_state:
-                        del st.session_state["current_word_analysis"]
-                    st.rerun()
+
+            # Build list of words from graph data for selection
+            if st.session_state.get("graph_data"):
+                # Collect all words from all language graphs
+                word_options = []
+                for lang, data in st.session_state["graph_data"].items():
+                    for node in data.get("nodes", []):
+                        word_label = node.get("label", "")
+                        word_lang = node.get("language", lang)
+                        word_pos = node.get("pos", "")
+                        if word_label:
+                            # Create display string and store data
+                            display = f"{word_label} ({word_lang}) - {word_pos}"
+                            word_options.append({
+                                "display": display,
+                                "word": word_label,
+                                "language": word_lang,
+                                "pos": word_pos
+                            })
+
+                # Remove duplicates based on word+language
+                seen = set()
+                unique_options = []
+                for opt in word_options:
+                    key = (opt["word"], opt["language"])
+                    if key not in seen:
+                        seen.add(key)
+                        unique_options.append(opt)
+
+                if unique_options:
+                    # Create selectbox for word selection
+                    st.info("💡 **Select a word from the graph to analyze it:**")
+
+                    display_options = ["-- Select a word --"] + [opt["display"] for opt in unique_options]
+                    selected_display = st.selectbox(
+                        "Choose a word to analyze",
+                        options=display_options,
+                        key="word_analysis_selectbox"
+                    )
+
+                    if selected_display != "-- Select a word --":
+                        # Find the selected word data
+                        selected_word_data = next(
+                            (opt for opt in unique_options if opt["display"] == selected_display),
+                            None
+                        )
+
+                        if selected_word_data:
+                            word = selected_word_data["word"]
+                            language = selected_word_data["language"]
+                            pos = selected_word_data["pos"]
+
+                            st.success(f"**Selected Word**: {word} ({language}) - {pos}")
+
+                            # Analyze button
+                            if st.button("🔍 Analyze Selected Word", type="primary"):
+                                if st.session_state.get("model_available", False):
+                                    with st.spinner(f"Analyzing '{word}' using LLM..."):
+                                        # Get the LLM client
+                                        api_key = None
+                                        organization = None
+                                        provider = st.session_state["llm_provider"]
+                                        model_name = st.session_state["model_name"]
+
+                                        if provider == "openai":
+                                            api_key = st.session_state.get("openai_api_key")
+                                            organization = st.session_state.get("openai_organization")
+
+                                        logger.info(f"Creating LLM client: provider={provider}, model={model_name}")
+
+                                        client = LLMClient.create(
+                                            provider=provider,
+                                            model_name=model_name,
+                                            api_key=api_key,
+                                            organization=organization
+                                        )
+
+                                        # Check client status
+                                        client_status = client.get_model_status()
+                                        logger.info(f"Client status: {client_status}")
+
+                                        # Run the analysis
+                                        loop = asyncio.new_event_loop()
+                                        asyncio.set_event_loop(loop)
+                                        try:
+                                            analysis_data = loop.run_until_complete(
+                                                analyze_selected_word(word, language, client)
+                                            )
+                                            # Log what we got back
+                                            logger.info(f"Analysis result keys: {list(analysis_data.keys()) if analysis_data else 'None'}")
+
+                                            # Store the analysis for display
+                                            st.session_state["current_word_analysis"] = analysis_data
+                                            st.session_state["current_word"] = word
+                                            st.session_state["current_word_lang"] = language
+                                            st.rerun()
+                                        finally:
+                                            loop.close()
+                                else:
+                                    st.error("⚠️ LLM model not available. Please check the model status above.")
+
+                            # Display analysis if available
+                            analysis_data = st.session_state.get("current_word_analysis")
+                            if analysis_data and st.session_state.get("current_word") == word:
+                                if "error" not in analysis_data:
+                                    display_word_analysis(word, language, analysis_data)
+                                else:
+                                    st.error(f"Analysis failed: {analysis_data['error']}")
                 else:
-                    st.info("💡 **Click on any word in the graph above to select it for analysis.**")
+                    st.info("No words available in the graph for analysis.")
             else:
                 st.info("No graph data available yet. Translate some text to generate graphs.")
         

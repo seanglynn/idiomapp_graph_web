@@ -2,7 +2,7 @@
 Natural Language Processing utilities.
 Uses textacy and spaCy for advanced NLP capabilities.
 """
-
+import json
 import os
 import re
 import logging
@@ -881,42 +881,19 @@ def build_word_cooccurrence_network(text: str, language: str, window_size: int =
         
         # Build co-occurrence network with textacy
         try:
-            # Check textacy version and use appropriate parameters
-            textacy_version = textacy.__version__
-            logger.info(f"Using textacy version: {textacy_version}")
+            # textacy 0.13 expects Sequence[str], not a spaCy Doc
+            terms = [token.text.lower() for token in doc if term_filter(token)]
 
-            # Extract filtered tokens from the spaCy doc for newer textacy API
-            # Newer textacy versions expect Sequence[str] or Sequence[Sequence[str]]
-            filtered_tokens = [
-                token.text.lower() for token in doc
-                if term_filter(token)
-            ]
-
-            if not filtered_tokens:
-                logger.warning(f"No filtered tokens found. Using simplified approach for {language}.")
+            if not terms:
+                logger.warning(f"No terms passed POS/frequency filter for {language}")
                 return _build_simple_cooccurrence_network(text, window_size, min_freq)
 
-            # Try building with the new API first (sequence of tokens)
-            try:
-                graph = build_cooccurrence_network(
-                    [filtered_tokens],  # Pass as sequence of sequences (one "document")
-                    window_size=window_size,
-                    edge_weighting="count"
-                )
-            except (TypeError, ValueError) as e:
-                logger.warning(f"New API format failed ({e}), trying legacy spaCy Doc format")
-                # Fall back to legacy format with spaCy Doc
-                try:
-                    graph = build_cooccurrence_network(
-                        doc,
-                        window_size=window_size,
-                        edge_weighting="count"
-                    )
-                except Exception:
-                    # If both fail, use simplified approach
-                    logger.error(f"Both textacy API formats failed. Using simplified approach.")
-                    return _build_simple_cooccurrence_network(text, window_size, min_freq)
-
+            graph = build_cooccurrence_network(
+                terms,
+                window_size=window_size,
+                edge_weighting="count",
+            )
+            
             # If graph is empty, fall back to the simple approach
             if len(graph.nodes()) == 0:
                 logger.warning(f"Empty graph from textacy. Using simplified approach for {language}.")
@@ -1269,8 +1246,6 @@ async def analyze_word_linguistics(word: str, language: str, client=None) -> Dic
                 analysis.update(enhanced_info)
             except Exception as e:
                 logger.warning(f"LLM analysis failed for {word}: {e}")
-                # Fall back to basic analysis
-                pass
         
         return analysis
         
@@ -1351,79 +1326,131 @@ def _improve_pos_detection(word: str, language: str) -> Optional[str]:
 async def _get_llm_word_analysis(word: str, language: str, pos: str, client) -> Dict[str, Any]:
     """
     Get enhanced linguistic analysis using LLM for language learning insights.
-    
+
     Args:
         word: Word to analyze
         language: Language code
         pos: Part of speech
         client: LLM client
-        
+
     Returns:
         Dictionary with enhanced analysis
     """
     # Language names for prompts
     lang_names = {"en": "English", "es": "Spanish", "ca": "Catalan"}
     lang_name = lang_names.get(language, language)
-    
-    # Create a comprehensive prompt that lets the LLM do the heavy lifting
-    prompt = f"""
-        You are a {lang_name} language expert and linguistics professor. Analyze the word "{word}" 
-        (part of speech: {pos}) and provide comprehensive linguistic information for language learners.
-        
-        Focus on practical language learning insights and provide:
-        
-        **For VERBS:**
-        - Infinitive/base form
-        - Verb type (regular/irregular, conjugation pattern)
-        - Key conjugations (present, past, future)
-        - Related forms (participles, gerunds)
-        - Synonyms and related verbs
-        - Usage examples (2-3 simple sentences)
-        - Grammar rules and exceptions
-        
-        **For NOUNS:**
-        - Gender and number forms
-        - Article usage
-        - Related forms (diminutives, augmentatives)
-        - Synonyms and related nouns
-        - Usage examples
-        - Cultural notes if relevant
-        
-        **For ADJECTIVES:**
-        - Gender and number agreement
-        - Comparison forms
-        - Synonyms and antonyms
-        - Usage examples
-        - Position rules
-        
-        **For other parts of speech:**
-        - Definition and usage
-        - Related words
-        - Examples
-        - Grammar notes
-        
-        Format your response as clean, structured JSON. Focus on being educational and helpful for language learners.
-        """
-    
-    system_prompt = f"You are a {lang_name} language expert and linguistics professor. Provide accurate, educational information in clean JSON format. Focus on practical language learning insights."
+
+    # Create a focused prompt for word analysis - returning valid JSON
+    prompt = f"""Analyze the {lang_name} word "{word}" (part of speech: {pos}).
+
+Return a JSON object with these fields (include all that apply):
+
+{{
+  "definition": "clear definition of the word",
+  "etymology": "origin and history of the word",
+  "language_origin": "source language (Latin, Greek, etc.)",
+  "root": "root morpheme",
+  "cognates": ["related words in English", "French", "Italian", "Portuguese"],
+  "synonyms": ["synonym1", "synonym2", "synonym3"],
+  "antonyms": ["antonym1", "antonym2"],
+  "examples": ["Example sentence 1.", "Example sentence 2.", "Example sentence 3."],
+  "idioms": ["idiomatic expression using this word"],
+  "collocations": ["common word combination 1", "common word combination 2"],
+  "register": "formal/informal/colloquial",
+  "frequency": "common/uncommon/rare",
+  "regional_variations": "differences between regions",
+  "pronunciation": {{
+    "ipa": "IPA transcription",
+    "syllables": "syl-la-bles",
+    "stress": "stressed syllable"
+  }},
+  "grammar": {{
+    "infinitive": "base form (for verbs)",
+    "verb_type": "regular/irregular (for verbs)",
+    "gender": "masculine/feminine (for nouns)",
+    "plural": "plural form (for nouns)",
+    "conjugations": {{"present": "yo form", "past": "past form", "future": "future form"}}
+  }},
+  "tips": ["learning tip for this word"],
+  "common_mistakes": ["common error learners make"],
+  "false_friends": ["similar-looking word in another language that means something different"]
+}}
+
+Respond ONLY with the JSON object, no other text. Make sure the JSON is valid."""
+
+    system_prompt = f"You are a {lang_name} linguistics expert. Respond only with valid JSON. No markdown, no explanation, just the JSON object."
     
     try:
+        client_type = type(client).__name__
+        logger.debug(f"Calling LLM for word analysis: {word} ({language}), client={client_type}")
+
+        # Check client status
+        try:
+            status = client.get_model_status()
+            logger.debug(f"Client status: {status}")
+            if not status.get("available", False):
+                logger.warning(f"Model may not be available: {status}")
+        except Exception as status_err:
+            logger.warning(f"Could not check client status: {status_err}")
+
         response = await client.generate_text(prompt, system_prompt=system_prompt)
-        
-        # Try to extract JSON from response
-        import json
-        import re
-        
-        # Find JSON in the response
-        json_match = re.search(r'\{.*\}', response, re.DOTALL)
-        if json_match:
-            json_str = json_match.group(0)
-            enhanced_data = json.loads(json_str)
-            return enhanced_data
-        else:
-            logger.warning(f"Could not extract JSON from LLM response for {word}")
-            return {"llm_analysis": response}
-            
+
+        logger.debug(f"LLM response length: {len(response) if response else 0}")
+
+        if not response or response.strip() == "":
+            logger.warning(f"Empty response from LLM for {word}")
+            return {"llm_error": "Empty response from LLM"}
+
+        if response.startswith("Error:"):
+            logger.warning(f"LLM returned error: {response}")
+            return {"llm_error": response}
+
+        # Method 1: Try to find JSON block with ```json markers
+        json_block_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', response, re.DOTALL)
+        if json_block_match:
+            try:
+                enhanced_data = json.loads(json_block_match.group(1))
+                logger.debug(f"Parsed JSON from code block ({len(enhanced_data)} fields)")
+                return enhanced_data
+            except json.JSONDecodeError as e:
+                logger.warning(f"Failed to parse JSON from code block: {e}")
+
+        # Method 2: Find the outermost JSON object by counting braces
+        brace_count = 0
+        json_start = -1
+        json_end = -1
+        for i, char in enumerate(response):
+            if char == '{':
+                if brace_count == 0:
+                    json_start = i
+                brace_count += 1
+            elif char == '}':
+                brace_count -= 1
+                if brace_count == 0 and json_start != -1:
+                    json_end = i + 1
+                    break
+
+        if json_start != -1 and json_end != -1:
+            json_str = response[json_start:json_end]
+            try:
+                enhanced_data = json.loads(json_str)
+                logger.debug(f"Parsed JSON object ({len(enhanced_data)} fields)")
+                return enhanced_data
+            except json.JSONDecodeError:
+                # Try to fix common JSON issues: trailing commas, single quotes
+                fixed_json = re.sub(r',\s*([}\]])', r'\1', json_str)
+                fixed_json = fixed_json.replace("'", '"')
+                try:
+                    enhanced_data = json.loads(fixed_json)
+                    logger.debug(f"Parsed fixed JSON ({len(enhanced_data)} fields)")
+                    return enhanced_data
+                except json.JSONDecodeError as e2:
+                    logger.warning(f"Failed to parse JSON from LLM response: {e2}")
+
+        # Method 3: Fallback - return raw response for display
+        logger.warning(f"Could not extract JSON from LLM response for {word}, returning raw text")
+        return {"llm_raw_analysis": response}
+
     except Exception as e:
-        logger.error(f"LLM analysis failed for {word}: {e}")
+        logger.error(f"LLM analysis failed for {word}: {e}", exc_info=True)
         return {"llm_error": str(e)} 

@@ -1,3 +1,4 @@
+import os
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
 import json
@@ -69,10 +70,10 @@ class OllamaClient(LLMClient):
         """Check if the model is available, and try to pull it if not."""
         # Check cache first to avoid repeated API calls
         if self.model_name in self._model_available_cache:
-            logger.info(f"Using cached model availability for {self.model_name}: {self._model_available_cache[self.model_name]}")
+            logger.debug(f"Using cached model availability for {self.model_name}: {self._model_available_cache[self.model_name]}")
             return self._model_available_cache[self.model_name]
-            
-        logger.info(f"Checking availability of model: {self.model_name}")
+
+        logger.debug(f"Checking availability of model: {self.model_name}")
         
         try:
             # Get list of available models
@@ -80,7 +81,7 @@ class OllamaClient(LLMClient):
             model_available = self.model_name in available_models
             
             if model_available:
-                logger.info(f"Model {self.model_name} is available")
+                logger.debug(f"Model {self.model_name} is available")
                 self._model_available_cache[self.model_name] = True
                 return True
             else:
@@ -111,43 +112,60 @@ class OllamaClient(LLMClient):
     async def generate_text(self, prompt, system_prompt=None):
         """
         Generate text from the model.
-        
+
         Args:
             prompt: The prompt to send to the model.
             system_prompt: Optional system prompt for context.
-            
+
         Returns:
             str: The generated text response.
         """
         if not self._check_model_availability():
             logger.error(f"Model {self.model_name} is not available")
             return "Error: Model not available. Please check if Ollama is running and the model is installed."
-            
+
         try:
-            # Prepare the prompt
-            full_prompt = prompt
+            # Build messages list with proper system/user separation
+            messages = []
             if system_prompt:
-                full_prompt = f"{system_prompt}\n\n{prompt}"
-            
-            logger.info(f"Generating text with Ollama model {self.model_name}")
-            logger.debug(f"Prompt: {full_prompt[:100]}...")
-            
-            # Make API request
-            response = ollama.chat(
-                model=self.model_name,
-                messages=[{"role": "user", "content": full_prompt}]
-            )
-            
-            # Extract response text
-            generated_text = response['message']['content'] or ""
-            
-            logger.info(f"Generated text length: {len(generated_text)}")
-            logger.debug(f"Response: {generated_text[:100]}...")
-            
+                messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "user", "content": prompt})
+
+            logger.debug(f"Generating text with Ollama model {self.model_name}, prompt={len(prompt)} chars")
+
+            # Set OLLAMA_HOST so the module-level ollama.chat() connects to the right host
+            original_host = os.environ.get("OLLAMA_HOST")
+            os.environ["OLLAMA_HOST"] = self.ollama_host
+            try:
+                response = ollama.chat(
+                    model=self.model_name,
+                    messages=messages
+                )
+            finally:
+                if original_host:
+                    os.environ["OLLAMA_HOST"] = original_host
+                elif "OLLAMA_HOST" in os.environ:
+                    del os.environ["OLLAMA_HOST"]
+
+            # Extract response text — direct key access works for both dict and Pydantic ChatResponse
+            generated_text = ""
+            try:
+                generated_text = response['message']['content']
+            except (KeyError, TypeError):
+                try:
+                    generated_text = response['response']
+                except (KeyError, TypeError):
+                    logger.warning(f"Unexpected response structure: {type(response)}")
+                    generated_text = str(response)
+
+            logger.debug(f"Generated text length: {len(generated_text)}")
+            if not generated_text:
+                logger.info(f"Empty response from Ollama model {self.model_name}")
+
             return generated_text
-            
+
         except Exception as e:
-            logger.error(f"Unexpected error generating text: {str(e)}")
+            logger.error(f"Unexpected error generating text: {str(e)}", exc_info=True)
             return f"Error: {str(e)}"
 
 
@@ -223,8 +241,7 @@ class OpenAIClient(LLMClient):
             # Add user prompt
             messages.append({"role": "user", "content": prompt})
             
-            logger.info(f"Generating text with OpenAI model {self.model_name}")
-            logger.debug(f"Prompt: {prompt[:100]}...")
+            logger.debug(f"Generating text with OpenAI model {self.model_name}")
             
             # Prepare API request parameters
             request_params = {
@@ -255,16 +272,23 @@ class OpenAIClient(LLMClient):
             
             # Extract response text
             generated_text = response.choices[0].message.content or ""
-            
-            logger.info(f"Generated text length: {len(generated_text)}")
-            logger.debug(f"Response: {generated_text[:100]}...")
-            
+
+            logger.debug(f"Generated text length: {len(generated_text)}")
+            if not generated_text:
+                logger.info(
+                    f"Empty response from OpenAI model {self.model_name}. "
+                    f"Finish reason: {response.choices[0].finish_reason}, "
+                    f"Refusal: {getattr(response.choices[0].message, 'refusal', None)}"
+                )
+            else:
+                logger.debug(f"Response: {generated_text[:100]}...")
+
             return generated_text
-            
+
         except Exception as e:
             error_msg = str(e)
             logger.error(f"Error generating text with OpenAI: {error_msg}")
-            
+
             # Handle specific parameter errors and try fallback
             if "max_tokens" in error_msg and "max_completion_tokens" in error_msg:
                 logger.info(f"Attempting fallback with max_completion_tokens for model {self.model_name}")
@@ -275,17 +299,17 @@ class OpenAIClient(LLMClient):
                         "messages": messages,
                         "max_completion_tokens": settings.openai_max_tokens
                     }
-                    
+
                     # Only add temperature if it's supported by this model
                     model_capabilities = get_model_capabilities(self.model_name)
                     if model_capabilities.get("supports_custom_temperature", True):
                         fallback_params["temperature"] = settings.openai_temperature
-                    
+
                     response: ChatCompletion = self.client.chat.completions.create(**fallback_params)
                     generated_text = response.choices[0].message.content or ""
-                    
+
                     logger.info(f"Fallback successful with max_completion_tokens")
-                    logger.info(f"Generated text length: {len(generated_text)}")
+                    logger.debug(f"Generated text length: {len(generated_text)}")
                     logger.debug(f"Response: {generated_text[:100]}...")
                     
                     return generated_text
