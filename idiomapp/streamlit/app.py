@@ -677,104 +677,104 @@ def display_translation_error(error_message: str, target_lang: str):
 
 async def translate_text(client, source_text, source_lang, target_lang):
     """
-    Translate text using the Ollama model.
-    
+    Translate text using the LLM client.
+
+    Uses structured JSON output for OpenAI provider for reliable parsing,
+    falls back to plain text for other providers.
+
     Args:
-        client: The Ollama client
+        client: The LLM client (OpenAI or Ollama)
         source_text: Text to translate
         source_lang: Source language code
         target_lang: Target language code
-        
+
     Returns:
         Translated text
     """
     logger.info(f"Translating from {source_lang} to {target_lang}: {source_text}")
-    
-    # Special prompt for Catalan to ensure proper Catalan and not Spanish
-    if target_lang == "ca":
-        catalan_note = """
-        IMPORTANT: Translate to proper Catalan, NOT Spanish. Catalan uses different words and grammar than Spanish.
-        Key differences:
-        - Spanish "el" → Catalan "el", but Spanish "la" → Catalan "la"
-        - Spanish "¿Cómo estás?" → Catalan "Com estàs?"
-        - Spanish "gracias" → Catalan "gràcies"
-        - Catalan often uses apostrophes: l'home, d'aigua
-        - Catalan has è and ò accents that don't exist in Spanish
-        """
-        prompt = f"""
-        Translate the following text 
-            from {LANGUAGE_MAP[source_lang]['name']} 
-            to {LANGUAGE_MAP[target_lang]['name']} (Catalan): "{source_text}"
-        
-        {catalan_note}
-        
-        Translation ({LANGUAGE_MAP[target_lang]['name']} {LANGUAGE_MAP[target_lang]['flag']} LANG_TAG_{target_lang}): 
-        """
-        system_prompt = "You are a Catalan language expert fluent in both Catalan and Spanish, aware of their differences. Provide ONLY the translation without any explanation or clarification."
+
+    source_name = LANGUAGE_MAP[source_lang]['name']
+    target_name = LANGUAGE_MAP[target_lang]['name']
+
+    # Check if client supports structured JSON output (OpenAI)
+    if hasattr(client, 'generate_json'):
+        return await _translate_with_json(client, source_text, source_name, target_name)
     else:
-        prompt = f"""
-        Translate the following text 
-            from {LANGUAGE_MAP[source_lang]['name']} 
-            to {LANGUAGE_MAP[target_lang]['name']}: "{source_text}"
-        Translation ({LANGUAGE_MAP[target_lang]['name']} {LANGUAGE_MAP[target_lang]['flag']} LANG_TAG_{target_lang}): 
-        """
-        system_prompt = "You are a translation expert. Provide ONLY the translation without any explanation or clarification."
-    
+        return await _translate_with_text(client, source_text, source_name, target_name)
+
+
+async def _translate_with_json(client, source_text, source_name, target_name):
+    """
+    Translate using OpenAI's structured JSON output for reliable parsing.
+    """
+    system_prompt = f"""You are a professional translator. Translate text from {source_name} to {target_name}.
+Return ONLY a JSON object with a single key "translation" containing the translated text.
+Preserve the original formatting (line breaks, punctuation)."""
+
+    prompt = f"""Translate this text from {source_name} to {target_name}:
+
+{source_text}
+
+Return JSON: {{"translation": "your translation here"}}"""
+
     try:
-        translation = await client.generate_text(prompt, system_prompt=system_prompt)
-        
-        # Clean up the translation (remove quotes if they exist)
-        translation = translation.strip('"\'').strip()
-        
-        # Check for explanatory text before the actual translation
-        # Common patterns where the model explains instead of just translating
-        explanation_patterns = [
-            # Look for quotes that might contain the actual translation
-            r'["""\'\'\'](.*?)[\"""\'\'\']',
-            # Look for phrases that indicate the model is about to give the translation
-            r'(?:here is|here\'s|the translation is|translated as)[:\s]+(.+)',
-            # Look for the target language name followed by a colon/translation
-            rf'{LANGUAGE_MAP[target_lang]["name"]}[:\s]+(.+)',
-            # Look for lines that start with the actual translation (after removing language tag)
-            r'^\s*([^"\'\n].+)$'
-        ]
-        
-        # Try to extract just the translation part using the patterns
-        extracted_translation = None
-        for pattern in explanation_patterns:
-            matches = re.search(pattern, translation, re.IGNORECASE | re.DOTALL)
-            if matches:
-                extracted_translation = matches.group(1).strip()
-                # If we found something promising, use it
-                if len(extracted_translation) > 0 and not extracted_translation.startswith("http"):
-                    translation = extracted_translation
-                    break
-        
-        # Verify the correct language tag is present and remove it
-        expected_tag = f"LANG_TAG_{target_lang}"
-        if expected_tag in translation:
-            translation = translation.replace(expected_tag, "").strip()
-        else:
-            logger.warning(f"Language tag {expected_tag} not found in translation response")
-        
-        # Clean up any remaining quotation marks
-        translation = translation.strip('"\'').strip()
-        
-        # If the translation contains multiple paragraphs or explanation, try to extract just the translation
-        if "\n\n" in translation:
-            # Try to find the actual translation (usually the shortest paragraph or quoted text)
-            paragraphs = [p.strip() for p in translation.split("\n\n") if p.strip()]
-            if paragraphs:
-                # Use the shortest non-empty paragraph that's not just a language marker
-                paragraphs = [p for p in paragraphs if len(p) > 3 and not p.startswith("LANG_TAG")]
-                if paragraphs:
-                    translation = min(paragraphs, key=len)
-        
-        logger.info(f"Translation result: {translation}")
-        return translation
+        result = await client.generate_json(prompt, system_prompt=system_prompt)
+
+        if "error" in result:
+            logger.error(f"JSON translation error: {result['error']}")
+            return f"Error: {result['error']}"
+
+        translation = result.get("translation", "")
+        if not translation:
+            logger.error("Empty translation in JSON response")
+            return "Error: Empty translation received"
+
+        logger.info(f"Translation result (JSON): {translation[:100]}...")
+        return translation.strip()
+
     except Exception as e:
         logger.error(f"Translation error: {str(e)}")
-        return f"Translation error: {str(e)}"
+        return f"Error: {str(e)}"
+
+
+async def _translate_with_text(client, source_text, source_name, target_name):
+    """
+    Translate using plain text output for non-OpenAI providers (e.g., Ollama).
+    Uses XML-like delimiters for reliable parsing.
+    """
+    system_prompt = f"""You are a professional translator. Translate text from {source_name} to {target_name}.
+Output ONLY the translation wrapped in <translation> tags. No explanations."""
+
+    prompt = f"""Translate this text from {source_name} to {target_name}:
+
+{source_text}
+
+<translation>
+"""
+
+    try:
+        response = await client.generate_text(prompt, system_prompt=system_prompt)
+
+        # Extract content between <translation> tags
+        match = re.search(r'<translation>\s*(.*?)\s*(?:</translation>|$)', response, re.DOTALL | re.IGNORECASE)
+        if match:
+            translation = match.group(1).strip()
+        else:
+            # Fallback: use the entire response, cleaned up
+            translation = response.strip()
+            # Remove any closing tag that might be at the end
+            translation = re.sub(r'\s*</translation>\s*$', '', translation, flags=re.IGNORECASE)
+
+        if not translation:
+            logger.error("Empty translation in text response")
+            return "Error: Empty translation received"
+
+        logger.info(f"Translation result (text): {translation[:100]}...")
+        return translation.strip()
+
+    except Exception as e:
+        logger.error(f"Translation error: {str(e)}")
+        return f"Error: {str(e)}"
 
 async def analyze_translation(source_text, target_texts, target_langs):
     """

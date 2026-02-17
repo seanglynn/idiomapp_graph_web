@@ -898,10 +898,10 @@ def build_word_cooccurrence_network(text: str, language: str, window_size: int =
             if len(graph.nodes()) == 0:
                 logger.warning(f"Empty graph from textacy. Using simplified approach for {language}.")
                 return _build_simple_cooccurrence_network(text, window_size, min_freq)
-                
+
             logger.info(f"Built co-occurrence network with {len(graph.nodes)} nodes and {len(graph.edges)} edges")
             return graph
-            
+
         except Exception as e:
             logger.warning(f"Error in textacy network building: {e}. Using simplified approach.")
             return _build_simple_cooccurrence_network(text, window_size, min_freq)
