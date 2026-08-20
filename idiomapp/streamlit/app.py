@@ -8,11 +8,17 @@ import html
 # Third-party imports
 import streamlit as st 
 from pyvis.network import Network
+from pydantic import BaseModel
 from streamlit.logger import get_logger
 
 # Internal imports
-from idiomapp.utils.llm_utils import LLMClient, get_openai_available_models
+from idiomapp.utils.llm_utils import (
+    get_openai_available_models,
+    get_anthropic_available_models,
+)
 from idiomapp.utils.ollama_utils import get_available_models
+from idiomapp.utils.async_utils import run_async
+from idiomapp.utils.state_utils import get_llm_client
 from idiomapp.utils.logging_utils import get_logger, get_recent_logs, clear_logs
 from idiomapp.utils.graph_storage import get_graph_storage
 from idiomapp.config import (
@@ -192,17 +198,73 @@ def get_language_display(lang_code: str, include_flag: bool = True) -> str:
     return lang_code.upper()
 
 
+# Betweenness centrality is O(V*E) and was recomputed on every rerun of the
+# co-occurrence tab. Keyed on a hashable edge signature because NetworkX graphs are
+# neither hashable nor picklable in a way st.cache_data can key on.
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_centrality(node_signature: tuple, edge_signature: tuple) -> tuple:
+    """Compute (degree, betweenness) centrality for a graph given its nodes and edges."""
+    import networkx as nx
+
+    graph = nx.Graph()
+    graph.add_nodes_from(node_signature)   # keeps isolated nodes, which affect degree centrality
+    graph.add_edges_from(edge_signature)
+    return nx.degree_centrality(graph), nx.betweenness_centrality(graph)
+
+
+def compute_centrality(graph) -> tuple:
+    """Get (degree, betweenness) centrality for a co-occurrence graph, cached."""
+    return _cached_centrality(
+        tuple(sorted(graph.nodes())),
+        tuple(sorted(tuple(sorted(e)) for e in graph.edges())),
+    )
+
+
+# Remote model lists are fetched over the network. Without caching these were
+# re-fetched on every Streamlit rerun - i.e. on every keystroke in the sidebar.
+@st.cache_data(ttl=3600, show_spinner=False)
+def cached_openai_models(api_key: str, organization: str) -> list:
+    """Available OpenAI models, cached for an hour."""
+    return get_openai_available_models(api_key, organization)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def cached_anthropic_models(api_key: str) -> list:
+    """Available Claude models, cached for an hour."""
+    return get_anthropic_available_models(api_key)
+
+
+def reset_llm_client_state() -> None:
+    """
+    Drop the cached LLM client so the next run rebuilds it with new credentials.
+
+    Shared by every provider's credential handler in the sidebar.
+    """
+    st.session_state["model_available"] = False
+    st.session_state["needs_client_reinit"] = True
+    st.session_state["llm_client"] = None
+    st.session_state["cached_model_status"] = None
+    st.session_state["cached_available_models"] = None
+
+
+# Providers whose display name is not just a capitalisation of the internal key.
+PROVIDER_DISPLAY_NAMES = {
+    "openai": "OpenAI",
+    "anthropic": "Claude",
+}
+
+
 def format_provider_name(provider: str) -> str:
     """
-    Format provider name for display (capitalize first letter).
-    
+    Format provider name for display.
+
     Args:
-        provider: Provider name (e.g., 'ollama', 'openai')
-        
+        provider: Provider name (e.g., 'ollama', 'openai', 'anthropic')
+
     Returns:
-        Capitalized provider name
+        Human-readable provider name ('anthropic' renders as 'Claude')
     """
-    return provider.title()
+    return PROVIDER_DISPLAY_NAMES.get(provider, provider.title())
 
 
 def get_model_index(model_list: list, target_model: str, default: int = 0) -> int:
@@ -650,9 +712,9 @@ def display_model_status(client):
                 f"⚠️ Ollama model '{model_name}' is not available. "
                 f"Host: {host}"
             )
-        elif provider == "openai":
+        elif provider in ("openai", "anthropic"):
             status_container.error(
-                f"⚠️ OpenAI model '{model_name}' is not available. "
+                f"⚠️ {format_provider_name(provider)} model '{model_name}' is not available. "
                 f"API key {'is not set' if not status.get('api_key_set') else 'may be invalid'}"
             )
         else:
@@ -675,41 +737,40 @@ def display_translation_error(error_message: str, target_lang: str):
     
     st.error(f"{lang_name} {flag}: {error_message}")
 
+class Translation(BaseModel):
+    """Schema for a single translation response."""
+
+    translation: str
+
+
 async def translate_text(client, source_text, source_lang, target_lang):
     """
     Translate text using the LLM client.
 
-    Uses structured JSON output for OpenAI provider for reliable parsing,
-    falls back to plain text for other providers.
+    Every provider implements generate_json, so there is one path here rather than
+    a per-provider branch. Providers that support schema-constrained output use the
+    Translation model; the rest fall back to tolerant parsing inside the client.
 
     Args:
-        client: The LLM client (OpenAI or Ollama)
+        client: The LLM client (Ollama, OpenAI or Anthropic)
         source_text: Text to translate
         source_lang: Source language code
         target_lang: Target language code
 
     Returns:
-        Translated text
+        Translated text, or an "Error: ..." string
     """
     logger.info(f"Translating from {source_lang} to {target_lang}: {source_text}")
 
     source_name = LANGUAGE_MAP[source_lang]['name']
     target_name = LANGUAGE_MAP[target_lang]['name']
 
-    # Check if client supports structured JSON output (OpenAI)
-    if hasattr(client, 'generate_json'):
-        return await _translate_with_json(client, source_text, source_name, target_name)
-    else:
-        return await _translate_with_text(client, source_text, source_name, target_name)
-
-
-async def _translate_with_json(client, source_text, source_name, target_name):
-    """
-    Translate using OpenAI's structured JSON output for reliable parsing.
-    """
-    system_prompt = f"""You are a professional translator. Translate text from {source_name} to {target_name}.
-Return ONLY a JSON object with a single key "translation" containing the translated text.
-Preserve the original formatting (line breaks, punctuation)."""
+    system_prompt = (
+        f"You are a professional translator. Translate text from {source_name} to "
+        f"{target_name}. Return ONLY a JSON object with a single key \"translation\" "
+        f"containing the translated text. Preserve the original formatting "
+        f"(line breaks, punctuation)."
+    )
 
     prompt = f"""Translate this text from {source_name} to {target_name}:
 
@@ -718,63 +779,27 @@ Preserve the original formatting (line breaks, punctuation)."""
 Return JSON: {{"translation": "your translation here"}}"""
 
     try:
-        result = await client.generate_json(prompt, system_prompt=system_prompt)
+        result = await client.generate_json(
+            prompt, system_prompt=system_prompt, schema=Translation
+        )
 
         if "error" in result:
-            logger.error(f"JSON translation error: {result['error']}")
-            return f"Error: {result['error']}"
+            logger.error(f"Translation error: {result['error']}")
+            error = result["error"]
+            return error if str(error).startswith("Error:") else f"Error: {error}"
 
-        translation = result.get("translation", "")
+        translation = (result.get("translation") or "").strip()
         if not translation:
-            logger.error("Empty translation in JSON response")
+            logger.error("Empty translation in response")
             return "Error: Empty translation received"
 
-        logger.info(f"Translation result (JSON): {translation[:100]}...")
-        return translation.strip()
+        logger.info(f"Translation result: {translation[:100]}...")
+        return translation
 
     except Exception as e:
         logger.error(f"Translation error: {str(e)}")
         return f"Error: {str(e)}"
 
-
-async def _translate_with_text(client, source_text, source_name, target_name):
-    """
-    Translate using plain text output for non-OpenAI providers (e.g., Ollama).
-    Uses XML-like delimiters for reliable parsing.
-    """
-    system_prompt = f"""You are a professional translator. Translate text from {source_name} to {target_name}.
-Output ONLY the translation wrapped in <translation> tags. No explanations."""
-
-    prompt = f"""Translate this text from {source_name} to {target_name}:
-
-{source_text}
-
-<translation>
-"""
-
-    try:
-        response = await client.generate_text(prompt, system_prompt=system_prompt)
-
-        # Extract content between <translation> tags
-        match = re.search(r'<translation>\s*(.*?)\s*(?:</translation>|$)', response, re.DOTALL | re.IGNORECASE)
-        if match:
-            translation = match.group(1).strip()
-        else:
-            # Fallback: use the entire response, cleaned up
-            translation = response.strip()
-            # Remove any closing tag that might be at the end
-            translation = re.sub(r'\s*</translation>\s*$', '', translation, flags=re.IGNORECASE)
-
-        if not translation:
-            logger.error("Empty translation in text response")
-            return "Error: Empty translation received"
-
-        logger.info(f"Translation result (text): {translation[:100]}...")
-        return translation.strip()
-
-    except Exception as e:
-        logger.error(f"Translation error: {str(e)}")
-        return f"Error: {str(e)}"
 
 async def analyze_translation(source_text, target_texts, target_langs):
     """
@@ -1121,64 +1146,6 @@ def add_cross_sentence_relationships(graph_data):
     except Exception as e:
         logger.error(f"Error in add_cross_sentence_relationships: {str(e)}")
         # Don't re-raise, allow processing to continue
-
-async def get_word_translation_map(client, source_words, target_words, source_lang, target_lang):
-    """Use LLM to map source words to their translations in target words"""
-    if not source_words or not target_words:
-        return {}
-        
-    # Limit to reasonable numbers to avoid overly complex prompts
-    max_words = 20
-    source_sample = source_words[:max_words]
-    target_sample = target_words[:max_words]
-    
-    # Get language names
-    source_lang_name = LANGUAGE_MAP.get(source_lang, {}).get("name", source_lang)
-    target_lang_name = LANGUAGE_MAP.get(target_lang, {}).get("name", target_lang)
-    
-    # Create the prompt
-    prompt = f"""Map each {source_lang_name} word to its corresponding {target_lang_name} translation.
-
-{source_lang_name} words: {', '.join(source_sample)}
-{target_lang_name} words: {', '.join(target_sample)}
-
-Provide a JSON mapping like this:
-{{
-  "source_word1": "target_word1",
-  "source_word2": "target_word2",
-  ...
-}}
-
-Only include mappings where you're confident about the translation. It's okay to leave out words.
-"""
-    
-    try:
-        # Call the API to get the mapping - use generate_text instead of generate
-        response_text = await client.generate_text(
-            prompt=prompt,
-            system_prompt="You are a translation assistant that provides JSON mappings between words."
-        )
-        
-        # Extract JSON from response
-        json_start = response_text.find("{")
-        json_end = response_text.rfind("}")
-        
-        if json_start != -1 and json_end != -1:
-            json_text = response_text[json_start:json_end+1]
-            
-            try:
-                # Parse the JSON data
-                mapping = json.loads(json_text)
-                logger.info(f"Successfully parsed word translation map with {len(mapping)} mappings")
-                return mapping
-            except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse word translation map: {str(e)}")
-        
-        return {}
-        
-    except Exception as e:
-        logger.error(f"Error getting word translation map: {str(e)}")
-        return {}
 
 # Add this helper function right before the visualize_translation_graph function
 def sanitize_tooltip_text(text):
@@ -2848,43 +2815,26 @@ def main():
     llm_provider = st.session_state["llm_provider"]
     model_name = st.session_state["model_name"]
     
-    # Use cached LLM client to prevent repeated initialization, but recreate if provider/model changes
-    client_needs_update = (
-        "llm_client" not in st.session_state or 
-        st.session_state.get("llm_provider") != llm_provider or
-        st.session_state.get("model_name") != model_name or
-        st.session_state.get("needs_client_reinit", False)  # Check for API key update flag
-    )
-    
-    if client_needs_update:
-        # Get API key from session state if using OpenAI
-        api_key = None
-        if llm_provider == "openai" and "openai_api_key" in st.session_state:
-            api_key = st.session_state["openai_api_key"]
-        
-        # Get organization from session state if using OpenAI
-        organization = None
-        if llm_provider == "openai" and "openai_organization" in st.session_state:
-            organization = st.session_state["openai_organization"]
-        
-        st.session_state["llm_client"] = LLMClient.create(
-            provider=llm_provider, 
-            model_name=model_name, 
-            api_key=api_key,
-            organization=organization
-        )
-        # Clear model status cache to force recheck
-        if "model_status_displayed_once" in st.session_state:
-            del st.session_state["model_status_displayed_once"]
-        if "last_model_available" in st.session_state:
-            del st.session_state["last_model_available"]
-        # Clear the reinit flag after successful client creation
-        if "needs_client_reinit" in st.session_state:
-            del st.session_state["needs_client_reinit"]
+    # Use the cached LLM client, rebuilding it only when the provider, the model or
+    # the credentials changed. get_llm_client() already implements exactly this, so
+    # the caching lives in one place rather than being repeated at each call site.
+    if st.session_state.pop("needs_client_reinit", False):
+        st.session_state["llm_client"] = None
+
+    previous = st.session_state.get("llm_client")
+    client = get_llm_client()
+
+    if client is not previous:
+        # Force the status line to re-check against the new client.
+        for key in ("model_status_displayed_once", "last_model_available"):
+            st.session_state.pop(key, None)
         logger.info(f"Created new LLM client for {llm_provider}:{model_name}")
-    
-    client = st.session_state["llm_client"]
-    
+
+    if client is None:
+        st.error("⚠️ Could not initialise an LLM client. Check the provider settings in the sidebar.")
+        st.session_state["model_available"] = False
+        return
+
     # Display model status and check if it's available (with caching)
     model_available = display_model_status(client)
     
@@ -2966,9 +2916,9 @@ def main():
         with st.expander("⚙️ LLM Settings", expanded=False):
             # LLM Provider selection
             st.subheader("LLM Provider")
-            provider_options = ["ollama", "openai"]
+            provider_options = ["ollama", "openai", "anthropic"]
             provider_index = get_provider_index(
-                provider_options, 
+                provider_options,
                 st.session_state["llm_provider"]
             )
             selected_provider = st.selectbox(
@@ -2978,8 +2928,11 @@ def main():
                 format_func=format_provider_name,
                 help="Select the LLM provider to use for translation"
             )
-            
-            # Show provider-specific options
+
+            model_name = st.session_state["model_name"]
+
+            # Show provider-specific options. Credentials live inside their own
+            # provider branch so an unrelated provider's key box is never shown.
             if selected_provider == "ollama":
                 # Use cached available models to prevent repeated API calls
                 if "cached_available_models" not in st.session_state:
@@ -2989,7 +2942,7 @@ def main():
                 model_label = build_model_label("Ollama Model", is_ollama_available)
                 model_index = get_model_index(available_models, st.session_state["model_name"])
                 is_disabled = not is_model_enabled("ollama", st.session_state["llm_provider"], st.session_state["model_available"])
-                
+
                 model_name = st.selectbox(
                     model_label,
                     available_models,
@@ -2997,9 +2950,9 @@ def main():
                     help="Select the Ollama model to use for translation",
                     disabled=is_disabled
                 )
+
             elif selected_provider == "openai":
-                # Dynamically fetch available OpenAI models instead of using hardcoded list
-                openai_models = get_openai_available_models(
+                openai_models = cached_openai_models(
                     st.session_state.get("openai_api_key", settings.openai_api_key),
                     st.session_state.get("openai_organization", settings.openai_organization)
                 )
@@ -3007,7 +2960,7 @@ def main():
                 model_label = build_model_label("OpenAI Model", is_openai_available)
                 model_index = get_model_index(openai_models, st.session_state["model_name"])
                 is_disabled = not is_model_enabled("openai", st.session_state["llm_provider"], st.session_state["model_available"])
-                
+
                 model_name = st.selectbox(
                     model_label,
                     openai_models,
@@ -3015,56 +2968,71 @@ def main():
                     help="Select the OpenAI model to use for translation",
                     disabled=is_disabled
                 )
-            
-            # Show API key input if OpenAI is selected
-            openai_api_key = st.text_input(
-                "OpenAI API Key",
-                type="password",
-                value=settings.openai_api_key,
-                help="Enter your OpenAI API key to use ChatGPT"
-            )
-            
-            # Show organization input if OpenAI is selected
-            openai_organization = st.text_input(
-                "OpenAI Organization ID (Optional)",
-                value=settings.openai_organization,
-                help="Enter your OpenAI organization ID if you're part of an organization"
-            )
-            
-            # Update session state if API key or organization changes
-            api_key_changed = openai_api_key != settings.openai_api_key
-            org_changed = openai_organization != settings.openai_organization
-            
-            if api_key_changed or org_changed:
-                # Store the API key and organization securely in session state only - NOT in environment variables
-                if openai_api_key:
-                    st.success("OpenAI credentials updated. Reinitializing client...")
-                    # Store API key in session state for secure access
-                    st.session_state["openai_api_key"] = openai_api_key
-                    # Store organization in session state for secure access
-                    if openai_organization:
-                        st.session_state["openai_organization"] = openai_organization
-                    else:
-                        # Clear organization from session state if it's empty
-                        if "openai_organization" in st.session_state:
+
+                openai_api_key = st.text_input(
+                    "OpenAI API Key",
+                    type="password",
+                    value=settings.openai_api_key,
+                    help="Enter your OpenAI API key to use ChatGPT"
+                )
+
+                openai_organization = st.text_input(
+                    "OpenAI Organization ID (Optional)",
+                    value=settings.openai_organization,
+                    help="Enter your OpenAI organization ID if you're part of an organization"
+                )
+
+                if openai_api_key != settings.openai_api_key or openai_organization != settings.openai_organization:
+                    # Credentials are held in session state only - never written to
+                    # environment variables.
+                    if openai_api_key:
+                        st.success("OpenAI credentials updated. Reinitializing client...")
+                        st.session_state["openai_api_key"] = openai_api_key
+                        if openai_organization:
+                            st.session_state["openai_organization"] = openai_organization
+                        elif "openai_organization" in st.session_state:
                             del st.session_state["openai_organization"]
-                    
-                    # Force reinitialization of client with new credentials
-                    st.session_state["model_available"] = False
-                    # Set a flag to trigger reinitialization on next interaction
-                    st.session_state["needs_client_reinit"] = True
-                    # Clear the cached client to force reinitialization
-                    st.session_state["llm_client"] = None
-                    st.session_state["cached_model_status"] = None
-                    st.session_state["cached_available_models"] = None
-                else:
-                    # Clear the API key from session state if it's empty
-                    if "openai_api_key" in st.session_state:
-                        del st.session_state["openai_api_key"]
-                    if "openai_organization" in st.session_state:
-                        del st.session_state["openai_organization"]
-                    st.warning("API key cleared. Please enter a valid API key to use OpenAI.")
-        
+                        reset_llm_client_state()
+                    else:
+                        for key in ("openai_api_key", "openai_organization"):
+                            if key in st.session_state:
+                                del st.session_state[key]
+                        st.warning("API key cleared. Please enter a valid API key to use OpenAI.")
+
+            elif selected_provider == "anthropic":
+                anthropic_models = cached_anthropic_models(
+                    st.session_state.get("anthropic_api_key", settings.anthropic_api_key)
+                )
+                is_anthropic_available = st.session_state['model_available'] and st.session_state['llm_provider'] == 'anthropic'
+                model_label = build_model_label("Claude Model", is_anthropic_available)
+                model_index = get_model_index(anthropic_models, st.session_state["model_name"])
+                is_disabled = not is_model_enabled("anthropic", st.session_state["llm_provider"], st.session_state["model_available"])
+
+                model_name = st.selectbox(
+                    model_label,
+                    anthropic_models,
+                    index=model_index,
+                    help="Select the Claude model to use for translation",
+                    disabled=is_disabled
+                )
+
+                anthropic_api_key = st.text_input(
+                    "Anthropic API Key",
+                    type="password",
+                    value=settings.anthropic_api_key,
+                    help="Enter your Anthropic API key to use Claude"
+                )
+
+                if anthropic_api_key != settings.anthropic_api_key:
+                    if anthropic_api_key:
+                        st.success("Anthropic credentials updated. Reinitializing client...")
+                        st.session_state["anthropic_api_key"] = anthropic_api_key
+                        reset_llm_client_state()
+                    else:
+                        if "anthropic_api_key" in st.session_state:
+                            del st.session_state["anthropic_api_key"]
+                        st.warning("API key cleared. Please enter a valid API key to use Claude.")
+
         # Update client if provider or model changes
         if selected_provider != st.session_state["llm_provider"] or model_name != st.session_state["model_name"]:
             st.session_state["llm_provider"] = selected_provider
@@ -3073,13 +3041,15 @@ def main():
             os.environ["LLM_PROVIDER"] = selected_provider
             if selected_provider == "ollama":
                 os.environ["DEFAULT_MODEL"] = model_name
+            elif selected_provider == "anthropic":
+                os.environ["ANTHROPIC_MODEL"] = model_name
             else:
                 os.environ["OPENAI_MODEL"] = model_name
             # Force reinitialization of client
             st.info("Provider or model changed. Reinitializing client...")
             st.session_state["model_available"] = False
             st.rerun()
-        
+
         # Graph Options - Move to collapsible expander
         with st.expander("📊 Graph Options", expanded=False):
         # Switch for visualization type
@@ -3267,30 +3237,29 @@ def main():
                 label_visibility="collapsed"
             )
             
-            btn_col1, btn_col2 = st.columns([1, 1])
-            
-            with btn_col1:
-                # Create button text based on number of target languages
-                if len(target_langs) == 1:
-                    button_text = f"🔄 Translate to {get_language_name(target_langs[0])}"
-                else:
-                    button_text = f"🔄 Translate to {len(target_langs)} languages"
-                    
-                translate_button = st.button(
-                    button_text, 
-                    use_container_width=True,
-                    disabled=not st.session_state["model_available"] or not source_text
-                )
-            
-            with btn_col2:
-                clear_button = st.button("🗑️ Clear History", use_container_width=True)
-                if clear_button:
-                    st.session_state["chat_history"] = []
-                    st.session_state["translations"] = {}
-                    st.session_state["graph_data"] = None
-                    st.session_state["cooccurrence_graphs"] = {}
-                    st.success("History cleared!")
-                    st.rerun()
+            # The buttons are stacked rather than placed in their own columns:
+            # this block already sits inside main_col > input_col, and Streamlit
+            # allows only one level of column nesting. Both buttons are
+            # full-width, so stacking reads the same.
+            if len(target_langs) == 1:
+                button_text = f"🔄 Translate to {get_language_name(target_langs[0])}"
+            else:
+                button_text = f"🔄 Translate to {len(target_langs)} languages"
+
+            translate_button = st.button(
+                button_text,
+                use_container_width=True,
+                disabled=not st.session_state["model_available"] or not source_text
+            )
+
+            clear_button = st.button("🗑️ Clear History", use_container_width=True)
+            if clear_button:
+                st.session_state["chat_history"] = []
+                st.session_state["translations"] = {}
+                st.session_state["graph_data"] = None
+                st.session_state["cooccurrence_graphs"] = {}
+                st.success("History cleared!")
+                st.rerun()
         
         with output_col:
             # Google Translate-style translation output
@@ -3609,37 +3578,19 @@ def main():
                             if st.button("🔍 Analyze Selected Word", type="primary"):
                                 if st.session_state.get("model_available", False):
                                     with st.spinner(f"Analyzing '{word}' using LLM..."):
-                                        # Get the LLM client
-                                        api_key = None
-                                        organization = None
-                                        provider = st.session_state["llm_provider"]
-                                        model_name = st.session_state["model_name"]
+                                        # Reuse the session's cached client rather than
+                                        # rebuilding one (which re-runs Ollama's
+                                        # availability check) on every button press.
+                                        client = get_llm_client()
 
-                                        if provider == "openai":
-                                            api_key = st.session_state.get("openai_api_key")
-                                            organization = st.session_state.get("openai_organization")
+                                        if client is None:
+                                            st.error("⚠️ Could not create an LLM client. Check the provider settings.")
+                                        else:
+                                            logger.info(f"Client status: {client.get_model_status()}")
 
-                                        logger.info(f"Creating LLM client: provider={provider}, model={model_name}")
-
-                                        client = LLMClient.create(
-                                            provider=provider,
-                                            model_name=model_name,
-                                            api_key=api_key,
-                                            organization=organization
-                                        )
-
-                                        # Check client status
-                                        client_status = client.get_model_status()
-                                        logger.info(f"Client status: {client_status}")
-
-                                        # Run the analysis
-                                        loop = asyncio.new_event_loop()
-                                        asyncio.set_event_loop(loop)
-                                        try:
-                                            analysis_data = loop.run_until_complete(
+                                            analysis_data = run_async(
                                                 analyze_selected_word(word, language, client)
                                             )
-                                            # Log what we got back
                                             logger.info(f"Analysis result keys: {list(analysis_data.keys()) if analysis_data else 'None'}")
 
                                             # Store the analysis for display
@@ -3647,8 +3598,6 @@ def main():
                                             st.session_state["current_word"] = word
                                             st.session_state["current_word_lang"] = language
                                             st.rerun()
-                                        finally:
-                                            loop.close()
                                 else:
                                     st.error("⚠️ LLM model not available. Please check the model status above.")
 
@@ -3714,8 +3663,7 @@ def main():
                     st.subheader("Most Important Words")
                     
                     # Calculate centrality measures
-                    degree_cent = nx.degree_centrality(graph)
-                    betweenness_cent = nx.betweenness_centrality(graph)
+                    degree_cent, betweenness_cent = compute_centrality(graph)
                     
                     # Get top words by degree centrality
                     top_degree = sorted(degree_cent.items(), key=get_centrality_sort_key)[:10]
@@ -3748,67 +3696,70 @@ def main():
         
         # Perform the translations
         with st.spinner(f"Translating to {target_lang_names}..."):
-            # Run the async function in a synchronous context
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            
             try:
-                # Create LLM client with selected provider and model
-                api_key = None
-                organization = None
-                if st.session_state["llm_provider"] == "openai":
-                    api_key = st.session_state.get("openai_api_key")
-                    organization = st.session_state.get("openai_organization")
-                
-                client = LLMClient.create(
-                    provider=st.session_state["llm_provider"], 
-                    model_name=st.session_state["model_name"],
-                    api_key=api_key,
-                    organization=organization
-                )
-                
+                # Reuse the session's cached client instead of rebuilding it here.
+                client = get_llm_client()
+                if client is None:
+                    st.error("❌ Could not create an LLM client. Please check the provider settings.")
+                    return
+
                 # Store overall translation results
                 all_graph_data = {}
                 cooccurrence_graphs = {}
-                
-                # Process each target language
+
                 successful_translations = {}
                 translation_errors = {}
-                
-                for target_lang in target_langs:
-                    # Get the translation for this language
-                    translation = loop.run_until_complete(
-                        translate_text(client, source_text, source_lang, target_lang)
-                    )
-                    
-                    # Check if translation was successful or if it's an error
+
+                # Translate to every target language concurrently. The clients are
+                # genuinely async, so N languages cost roughly one round-trip rather
+                # than N. Only the network calls are parallel - the spaCy work below
+                # is CPU-bound and stays sequential.
+                async def translate_all():
+                    return await asyncio.gather(*(
+                        translate_text(client, source_text, source_lang, lang)
+                        for lang in target_langs
+                    ), return_exceptions=True)
+
+                results = run_async(translate_all())
+
+                for target_lang, translation in zip(target_langs, results):
+                    if isinstance(translation, Exception):
+                        logger.error(f"Translation raised for {target_lang}: {translation}")
+                        translation_errors[target_lang] = str(translation)
+                        continue
+
                     if translation.startswith("Error:") or "Error code:" in translation:
-                        # This is an error - handle it separately
                         error_message = handle_translation_error(translation, source_lang, target_lang)
                         translation_errors[target_lang] = error_message
                         logger.warning(f"Translation failed for {target_lang}: {translation}")
                         continue
-                    
-                    # Store successful translation
+
                     successful_translations[target_lang] = translation
-                    
-                    # Verify if Spanish and Catalan translations might be swapped
-                    if "es" in successful_translations and "ca" in successful_translations and len(successful_translations) >= 2:
-                        # Check for Spanish markers in Catalan translation
-                        spanish_markers = ["es", "está", "estás", "la", "el", "los", "las", "y", "eres", "tienes"]
-                        catalan_markers = ["és", "està", "estàs", "la", "el", "els", "les", "i", "ets", "tens"]
-                        
-                        # Count occurrences of Spanish vs Catalan markers
-                        spanish_count_in_es = sum(1 for marker in spanish_markers if f" {marker} " in f" {successful_translations['es']} ")
-                        catalan_count_in_es = sum(1 for marker in catalan_markers if f" {marker} " in f" {successful_translations['es']} ")
-                        spanish_count_in_ca = sum(1 for marker in spanish_markers if f" {marker} " in f" {successful_translations['ca']} ")
-                        catalan_count_in_ca = sum(1 for marker in catalan_markers if f" {marker} " in f" {successful_translations['ca']} ")
-                        
-                        # If Spanish translation looks more like Catalan and vice versa, swap them
-                        if catalan_count_in_es > spanish_count_in_es and spanish_count_in_ca > catalan_count_in_ca:
-                            logger.warning("Detected possible language mismatch. Swapping Spanish and Catalan translations.")
-                            successful_translations["es"], successful_translations["ca"] = successful_translations["ca"], successful_translations["es"]
-                    
+
+                # Spanish and Catalan are close enough that a model occasionally
+                # returns them the wrong way round. Checked once, after all
+                # translations are in.
+                if "es" in successful_translations and "ca" in successful_translations:
+                    spanish_markers = ["es", "está", "estás", "la", "el", "los", "las", "y", "eres", "tienes"]
+                    catalan_markers = ["és", "està", "estàs", "la", "el", "els", "les", "i", "ets", "tens"]
+
+                    def count_markers(markers, text):
+                        return sum(1 for marker in markers if f" {marker} " in f" {text} ")
+
+                    es_text = successful_translations["es"]
+                    ca_text = successful_translations["ca"]
+
+                    if (count_markers(catalan_markers, es_text) > count_markers(spanish_markers, es_text)
+                            and count_markers(spanish_markers, ca_text) > count_markers(catalan_markers, ca_text)):
+                        logger.warning("Detected possible language mismatch. Swapping Spanish and Catalan translations.")
+                        successful_translations["es"], successful_translations["ca"] = ca_text, es_text
+
+                # Read the co-occurrence settings once rather than per language.
+                window_size = st.session_state.get("window_size", 2)
+                min_freq = st.session_state.get("min_freq", 1)
+                selected_pos = st.session_state.get("selected_pos", ["NOUN", "VERB", "ADJ"])
+
+                for target_lang, translation in successful_translations.items():
                     # Add each translation as a separate message
                     translation_content = f"{get_language_display(target_lang)}: {translation.strip()}"
                     st.session_state["chat_history"].append({
@@ -3816,26 +3767,18 @@ def main():
                         "content": translation_content,
                         "target_lang": target_lang  # Store target language for TTS
                     })
-                    
-                    # Generate the graph data for this language
-                    graph_data = loop.run_until_complete(
+
+                    # Generate the graph data for this language (spaCy, no network I/O)
+                    all_graph_data[target_lang] = run_async(
                         analyze_translation(source_text, [translation], [target_lang])
                     )
-                    
-                    # Store the graph data
-                    all_graph_data[target_lang] = graph_data
-                    
-                    # Generate co-occurrence network for source and target texts
-                    # Source text co-occurrence 
+
+                    # Source text co-occurrence - only needs building once
                     if source_lang not in cooccurrence_graphs:
-                        window_size = st.session_state.get("window_size", 2)
-                        min_freq = st.session_state.get("min_freq", 1)
-                        selected_pos = st.session_state.get("selected_pos", ["NOUN", "VERB", "ADJ"])
-                        
                         logger.info(f"Building co-occurrence network for {source_lang} with {len(source_text.split())} words")
                         source_cooccurrence = build_word_cooccurrence_network(
-                            source_text, 
-                            source_lang, 
+                            source_text,
+                            source_lang,
                             window_size=window_size,
                             min_freq=min_freq,
                             include_pos=selected_pos
@@ -3845,27 +3788,23 @@ def main():
                             cooccurrence_graphs[source_lang] = source_cooccurrence
                         else:
                             logger.warning(f"Empty co-occurrence network for {source_lang}")
-                    
+
                     # Target text co-occurrence
-                    window_size = st.session_state.get("window_size", 2)
-                    min_freq = st.session_state.get("min_freq", 1)
-                    selected_pos = st.session_state.get("selected_pos", ["NOUN", "VERB", "ADJ"])
-                    
                     logger.info(f"Building co-occurrence network for {target_lang} with {len(translation.split())} words")
                     target_cooccurrence = build_word_cooccurrence_network(
-                        translation, 
-                        target_lang, 
+                        translation,
+                        target_lang,
                         window_size=window_size,
                         min_freq=min_freq,
                         include_pos=selected_pos
                     )
-                    
+
                     if len(target_cooccurrence.nodes()) > 0:
                         logger.info(f"Built target co-occurrence network with {len(target_cooccurrence.nodes())} nodes")
                         cooccurrence_graphs[target_lang] = target_cooccurrence
                     else:
                         logger.warning(f"Empty co-occurrence network for {target_lang}")
-                
+
                 # Display any translation errors separately
                 if translation_errors:
                     st.error("⚠️ Some translations failed:")
@@ -3916,9 +3855,7 @@ def main():
                     "role": "assistant",
                     "content": f"Error: {str(e)}"
                 })
-            finally:
-                loop.close()
-                
+
             # Refresh the UI
             st.rerun()
 

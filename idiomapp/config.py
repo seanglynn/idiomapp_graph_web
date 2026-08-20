@@ -14,6 +14,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class LLMProvider(str, Enum):
     OLLAMA = "ollama"
     OPENAI = "openai"
+    ANTHROPIC = "anthropic"
 
 class LogLevel(str, Enum):
     DEBUG = "DEBUG"
@@ -57,9 +58,20 @@ class IdiomaAppSettings(BaseSettings):
     openai_temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="Controls randomness in OpenAI responses (0.0-2.0)")
     openai_max_tokens: int = Field(default=1024, ge=1, le=4096, description="Maximum tokens in OpenAI responses")
     
+    # Anthropic (Claude) configuration
+    # Default is Haiku 4.5: fastest/cheapest, which suits short repeated translations.
+    # Set ANTHROPIC_MODEL=claude-opus-5 (or pick it in the sidebar) for higher quality.
+    # NOTE: no anthropic_temperature - temperature/top_p are rejected with a 400 on
+    # Claude Opus 5 / Sonnet 5. Use anthropic_effort instead (see ANTHROPIC_MODEL_CAPABILITIES).
+    anthropic_api_key: str = ""
+    anthropic_model: str = "claude-haiku-4-5"
+    anthropic_max_tokens: int = Field(default=8192, ge=1, le=64000, description="Maximum tokens in Claude responses")
+    anthropic_effort: str = Field(default="low", description="Reasoning effort for models that support it")
+
     # Model configurations by provider (will be parsed from comma-separated strings)
     ollama_models: str = "llama3.2:latest,llama3:latest,mistral:latest"
     openai_models: str = "gpt-3.5-turbo,gpt-4,gpt-4-turbo"
+    anthropic_models: str = "claude-haiku-4-5,claude-sonnet-5,claude-opus-5"
     
     # Language options (will be parsed from comma-separated strings)
     supported_languages: str = "en,es,ca"
@@ -83,6 +95,12 @@ class IdiomaAppSettings(BaseSettings):
         """Parse openai_models from comma-separated string to list."""
         return [item.strip() for item in self.openai_models.split(',') if item.strip()]
     
+    @computed_field
+    @property
+    def anthropic_models_list(self) -> List[str]:
+        """Parse anthropic_models from comma-separated string to list."""
+        return [item.strip() for item in self.anthropic_models.split(',') if item.strip()]
+
     @computed_field
     @property
     def supported_languages_list(self) -> List[str]:
@@ -109,6 +127,8 @@ class IdiomaAppSettings(BaseSettings):
             return self.default_model
         elif self.llm_provider == LLMProvider.OPENAI:
             return self.openai_model
+        elif self.llm_provider == LLMProvider.ANTHROPIC:
+            return self.anthropic_model
         return self.default_model
     
     @computed_field
@@ -119,6 +139,8 @@ class IdiomaAppSettings(BaseSettings):
             return self.ollama_models_list
         elif self.llm_provider == LLMProvider.OPENAI:
             return self.openai_models_list
+        elif self.llm_provider == LLMProvider.ANTHROPIC:
+            return self.anthropic_models_list
         return []
     
     @model_validator(mode='after')
@@ -162,6 +184,8 @@ def get_model_by_provider(provider: str) -> str:
         return settings.default_model
     elif provider.lower() == LLMProvider.OPENAI.value:
         return settings.openai_model
+    elif provider.lower() == LLMProvider.ANTHROPIC.value:
+        return settings.anthropic_model
     raise ValueError(f"Invalid LLM provider: {provider}")
 
 def is_valid_provider(provider: str) -> bool:
@@ -169,8 +193,10 @@ def is_valid_provider(provider: str) -> bool:
     return provider.lower() in [e.value for e in LLMProvider]
 
 
-# Model capabilities configuration for OpenAI models
-# This provides a centralized, maintainable way to configure model-specific behavior
+# Model capabilities configuration for OpenAI models ONLY.
+# The flags here describe OpenAI *request parameters* (max_completion_tokens,
+# temperature). Do not route Anthropic models through this table - they have a
+# separate one below (ANTHROPIC_MODEL_CAPABILITIES).
 MODEL_CAPABILITIES: Dict[str, Dict[str, Any]] = {
     # GPT-5 models - strict parameter requirements
     "gpt-5": {
@@ -248,7 +274,7 @@ MODEL_CAPABILITIES: Dict[str, Dict[str, Any]] = {
 
 def get_model_capabilities(model_name: str) -> Dict[str, Any]:
     """
-    Get capabilities for a specific model.
+    Get OpenAI request-parameter capabilities for a specific model.
     
     Args:
         model_name: The name of the model to get capabilities for
@@ -308,6 +334,59 @@ def get_supported_models() -> list:
         list: List of supported model patterns
     """
     return list(MODEL_CAPABILITIES.keys()) 
+
+# ---------------------------------------------------------------------------
+# Anthropic (Claude) model capabilities
+# ---------------------------------------------------------------------------
+# Claude models differ in which request parameters they accept, and sending an
+# unsupported one is a hard 400 rather than a silent ignore:
+#
+#   * output_config={"effort": ...} is only accepted on 4.6-generation models and
+#     newer. Claude Haiku 4.5 predates it and rejects the request - and Haiku is
+#     our default model, so this gate is load-bearing.
+#   * temperature / top_p are rejected on Opus 5 and Sonnet 5, so we never send
+#     them for any Claude model and rely on `effort` instead.
+#   * budget_tokens was removed on 4.7+; adaptive thinking replaces it. Haiku 4.5
+#     would need the legacy form, so we simply omit thinking there - it is a fast
+#     non-reasoning model and that is the correct behaviour, not a workaround.
+ANTHROPIC_MODEL_CAPABILITIES: Dict[str, Dict[str, Any]] = {
+    "claude-haiku-4-5": {"supports_effort": False, "supports_adaptive_thinking": False},
+    "claude-sonnet-4-6": {"supports_effort": True, "supports_adaptive_thinking": True},
+    "claude-sonnet-5": {"supports_effort": True, "supports_adaptive_thinking": True},
+    "claude-opus-4-6": {"supports_effort": True, "supports_adaptive_thinking": True},
+    "claude-opus-4-7": {"supports_effort": True, "supports_adaptive_thinking": True},
+    "claude-opus-4-8": {"supports_effort": True, "supports_adaptive_thinking": True},
+    "claude-opus-5": {"supports_effort": True, "supports_adaptive_thinking": True},
+    "claude-fable-5": {"supports_effort": True, "supports_adaptive_thinking": True},
+}
+
+# Newer Claude generations all accept `effort`; only the 4.5-and-older line does not.
+_ANTHROPIC_LEGACY_PREFIXES = ("claude-haiku-4-5", "claude-3", "claude-2")
+
+
+def get_anthropic_model_capabilities(model_name: str) -> Dict[str, Any]:
+    """
+    Get request-parameter capabilities for a Claude model.
+
+    Args:
+        model_name: The Claude model id (e.g. "claude-haiku-4-5")
+
+    Returns:
+        dict: Capability flags. Unknown models are assumed to be a current
+              generation (effort supported), since that is where new ids land.
+    """
+    if model_name in ANTHROPIC_MODEL_CAPABILITIES:
+        return ANTHROPIC_MODEL_CAPABILITIES[model_name]
+
+    if any(model_name.startswith(prefix) for prefix in _ANTHROPIC_LEGACY_PREFIXES):
+        return {"supports_effort": False, "supports_adaptive_thinking": False}
+
+    return {"supports_effort": True, "supports_adaptive_thinking": True}
+
+
+def anthropic_supports_effort(model_name: str) -> bool:
+    """Whether `output_config={"effort": ...}` may be sent for this Claude model."""
+    return bool(get_anthropic_model_capabilities(model_name).get("supports_effort", False))
 
 # Relation type colors for graph edges
 RELATION_COLORS: Dict[str, str] = {

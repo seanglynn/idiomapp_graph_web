@@ -31,6 +31,13 @@ elif [ "${LLM_PROVIDER:-ollama}" = "openai" ]; then
   if [ -n "${OPENAI_ORGANIZATION}" ]; then
     echo "- OpenAI organization: ${OPENAI_ORGANIZATION}"
   fi
+elif [ "${LLM_PROVIDER:-ollama}" = "anthropic" ]; then
+  echo "- Claude model: ${ANTHROPIC_MODEL:-claude-haiku-4-5}"
+  if [ -z "${ANTHROPIC_API_KEY}" ]; then
+    echo "- WARNING: ANTHROPIC_API_KEY is not set. You will need to provide it in the UI."
+  else
+    echo "- Anthropic API key: [CONFIGURED]"
+  fi
 fi
 
 # Execute the command provided (or default to streamlit run)

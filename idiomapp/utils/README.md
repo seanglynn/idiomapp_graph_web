@@ -27,12 +27,28 @@ Audio processing utilities including text-to-speech functionality:
 
 ### `llm_utils.py`
 
-Utilities for interfacing with LLM providers (Ollama, OpenAI):
+Utilities for interfacing with LLM providers (Ollama, OpenAI, Anthropic):
 
-- `LLMClient`: Abstract base class for LLM providers
+- `LLMClient`: Abstract base class for LLM providers (`generate_text`, `generate_json`)
 - `OllamaClient`: Client for Ollama API
 - `OpenAIClient`: Client for OpenAI/ChatGPT API
+- `AnthropicClient`: Client for Anthropic's Claude API
 - `get_available_models`: Get available Ollama models
+- `get_openai_available_models` / `get_anthropic_available_models`: Populate model dropdowns
+
+All clients are async and build their SDK client lazily per event loop.
+
+### `async_utils.py`
+
+Bridges Streamlit's synchronous reruns and the async LLM clients:
+
+- `run_async`: Run a coroutine on this session's long-lived event loop
+- `get_event_loop`: Get (or create) that loop
+- `loop_key`: Identify the running loop, for keying loop-bound resources
+
+### `json_utils.py`
+
+- `extract_json`: Tolerantly pull a JSON object out of a raw LLM response
 
 ### `logging_utils.py`
 

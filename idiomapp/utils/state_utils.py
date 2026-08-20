@@ -240,6 +240,26 @@ def get_state_summary() -> Dict[str, Any]:
     }
     return summary
 
+def get_provider_credentials(provider: str):
+    """
+    Get the (api_key, organization) pair a provider needs from session state.
+
+    Args:
+        provider: Provider name ('ollama', 'openai' or 'anthropic')
+
+    Returns:
+        Tuple of (api_key, organization); both None for providers that need neither.
+    """
+    if provider == "openai":
+        return (
+            st.session_state.get("openai_api_key"),
+            st.session_state.get("openai_organization"),
+        )
+    if provider == "anthropic":
+        return st.session_state.get("anthropic_api_key"), None
+    return None, None
+
+
 def get_llm_client():
     """
     Get or create the LLM client based on current session state.
@@ -277,12 +297,8 @@ def get_llm_client():
         current_provider = st.session_state.get("llm_provider", settings.llm_provider.value)
         current_model = st.session_state.get("model_name", settings.current_model)
         
-        # Get API key and organization from session state if using OpenAI
-        api_key = None
-        organization = None
-        if current_provider == "openai":
-            api_key = st.session_state.get("openai_api_key")
-            organization = st.session_state.get("openai_organization")
+        # Credentials live in session state, keyed per provider.
+        api_key, organization = get_provider_credentials(current_provider)
         
         logger.info(f"Creating new LLM client for {current_provider}:{current_model}")
         client = LLMClient.create(
