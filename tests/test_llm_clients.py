@@ -37,14 +37,18 @@ def test_create_returns_the_right_client(provider, expected):
 
 
 def test_create_builds_ollama_client():
-    with patch("idiomapp.utils.llm_utils.get_available_models", return_value=["llama3.2:latest"]):
+    with patch(
+        "idiomapp.utils.llm_utils.get_available_models",
+        return_value=["llama3.2:latest"],
+    ):
         client = LLMClient.create(provider="ollama", model_name="llama3.2:latest")
     assert isinstance(client, OllamaClient)
 
 
 def test_create_falls_back_to_ollama_for_unknown_provider():
-    with patch("idiomapp.utils.llm_utils.get_available_models", return_value=[]), \
-         patch("idiomapp.utils.llm_utils.pull_model_if_needed", return_value=False):
+    with patch("idiomapp.utils.llm_utils.get_available_models", return_value=[]), patch(
+        "idiomapp.utils.llm_utils.pull_model_if_needed", return_value=False
+    ):
         client = LLMClient.create(provider="not-a-provider")
     assert isinstance(client, OllamaClient)
 
@@ -82,7 +86,9 @@ def test_claude_never_sends_temperature():
 
 def test_claude_omits_effort_on_haiku():
     """Haiku 4.5 predates output_config.effort and 400s if it is sent."""
-    params = AnthropicClient("claude-haiku-4-5", api_key="k")._build_request_params("hi", None)
+    params = AnthropicClient("claude-haiku-4-5", api_key="k")._build_request_params(
+        "hi", None
+    )
     assert "output_config" not in params
 
 
@@ -95,7 +101,9 @@ def test_claude_sends_effort_on_current_models():
 
 def test_claude_system_prompt_is_top_level():
     """`system` is a request parameter, not a message with role="system"."""
-    params = AnthropicClient("claude-opus-5", api_key="k")._build_request_params("hi", "be terse")
+    params = AnthropicClient("claude-opus-5", api_key="k")._build_request_params(
+        "hi", "be terse"
+    )
     assert params["system"] == "be terse"
     assert all(m["role"] != "system" for m in params["messages"])
 
@@ -183,7 +191,9 @@ async def test_claude_generate_json_uses_structured_output_when_given_a_schema()
 async def test_claude_generate_json_without_schema_parses_text():
     client = AnthropicClient("claude-haiku-4-5", api_key="k")
     sdk = MagicMock()
-    sdk.messages.create = AsyncMock(return_value=_fake_message('{"translation": "hola"}'))
+    sdk.messages.create = AsyncMock(
+        return_value=_fake_message('{"translation": "hola"}')
+    )
     client._sdk_client, client._sdk_loop_key = sdk, "fixed"
 
     with patch("idiomapp.utils.llm_utils.loop_key", return_value="fixed"):
@@ -194,7 +204,9 @@ async def test_claude_generate_json_without_schema_parses_text():
 async def test_openai_generate_json_returns_a_dict():
     client = OpenAIClient("gpt-4o", api_key="k")
     completion = MagicMock()
-    completion.choices = [MagicMock(message=MagicMock(content='{"translation": "hola"}'))]
+    completion.choices = [
+        MagicMock(message=MagicMock(content='{"translation": "hola"}'))
+    ]
 
     sdk = MagicMock()
     sdk.chat.completions.create = AsyncMock(return_value=completion)
@@ -203,20 +215,28 @@ async def test_openai_generate_json_returns_a_dict():
     with patch("idiomapp.utils.llm_utils.loop_key", return_value="fixed"):
         assert await client.generate_json("hi") == {"translation": "hola"}
 
-    assert sdk.chat.completions.create.await_args.kwargs["response_format"] == {"type": "json_object"}
+    assert sdk.chat.completions.create.await_args.kwargs["response_format"] == {
+        "type": "json_object"
+    }
 
 
 @pytest.mark.asyncio
 async def test_ollama_generate_json_uses_json_format():
-    with patch("idiomapp.utils.llm_utils.get_available_models", return_value=["llama3.2:latest"]):
+    with patch(
+        "idiomapp.utils.llm_utils.get_available_models",
+        return_value=["llama3.2:latest"],
+    ):
         client = OllamaClient("llama3.2:latest")
 
     sdk = MagicMock()
-    sdk.chat = AsyncMock(return_value={"message": {"content": '{"translation": "hola"}'}})
+    sdk.chat = AsyncMock(
+        return_value={"message": {"content": '{"translation": "hola"}'}}
+    )
     client._sdk_client, client._sdk_loop_key = sdk, "fixed"
 
-    with patch("idiomapp.utils.llm_utils.loop_key", return_value="fixed"), \
-         patch.object(OllamaClient, "_check_model_availability", return_value=True):
+    with patch("idiomapp.utils.llm_utils.loop_key", return_value="fixed"), patch.object(
+        OllamaClient, "_check_model_availability", return_value=True
+    ):
         assert await client.generate_json("hi") == {"translation": "hola"}
 
     assert sdk.chat.await_args.kwargs["format"] == "json"
@@ -246,12 +266,19 @@ def _capture_request_body(model: str) -> dict:
 
     def handler(request: httpx.Request) -> httpx.Response:
         captured.update(json.loads(request.content))
-        return httpx.Response(200, json={
-            "id": "msg_1", "type": "message", "role": "assistant", "model": model,
-            "content": [{"type": "text", "text": "ok"}],
-            "stop_reason": "end_turn", "stop_sequence": None,
-            "usage": {"input_tokens": 1, "output_tokens": 1},
-        })
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": model,
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
 
     async def run():
         client = AnthropicClient(model, api_key="sk-ant-test")
@@ -307,12 +334,16 @@ async def test_claude_falls_back_when_schema_is_rejected():
 
     client = AnthropicClient("claude-haiku-4-5", api_key="k")
     sdk = MagicMock()
-    sdk.messages.parse = AsyncMock(side_effect=anthropic.BadRequestError(
-        message="output_config.format is not supported",
-        response=httpx.Response(400, request=httpx.Request("POST", "https://x")),
-        body=None,
-    ))
-    sdk.messages.create = AsyncMock(return_value=_fake_message('{"definition": "a cat"}'))
+    sdk.messages.parse = AsyncMock(
+        side_effect=anthropic.BadRequestError(
+            message="output_config.format is not supported",
+            response=httpx.Response(400, request=httpx.Request("POST", "https://x")),
+            body=None,
+        )
+    )
+    sdk.messages.create = AsyncMock(
+        return_value=_fake_message('{"definition": "a cat"}')
+    )
     client._sdk_client, client._sdk_loop_key = sdk, "fixed"
 
     with patch("idiomapp.utils.llm_utils.loop_key", return_value="fixed"):
@@ -330,7 +361,9 @@ async def test_claude_schema_path_returns_canonical_dict():
     client = AnthropicClient("claude-opus-5", api_key="k")
     parsed = MagicMock()
     parsed.stop_reason = "end_turn"
-    parsed.parsed_output = WordAnalysis.model_validate({"idioms": {"dar la lata": "to annoy"}})
+    parsed.parsed_output = WordAnalysis.model_validate(
+        {"idioms": {"dar la lata": "to annoy"}}
+    )
 
     sdk = MagicMock()
     sdk.messages.parse = AsyncMock(return_value=parsed)
@@ -349,7 +382,9 @@ async def test_providers_agree_on_shape():
     from idiomapp.utils.nlp_utils import _get_llm_word_analysis
     from idiomapp.utils.schemas import WordAnalysis
 
-    payload = '{"definition":"a cat","idioms":{"dar la lata":"to annoy"},"synonyms":"felino"}'
+    payload = (
+        '{"definition":"a cat","idioms":{"dar la lata":"to annoy"},"synonyms":"felino"}'
+    )
 
     with patch("idiomapp.utils.llm_utils.get_available_models", return_value=["m"]):
         ollama_client = OllamaClient("m")
@@ -361,14 +396,19 @@ async def test_providers_agree_on_shape():
     parsed = MagicMock()
     parsed.stop_reason = "end_turn"
     parsed.parsed_output = WordAnalysis.model_validate(
-        {"definition": "a cat", "idioms": {"dar la lata": "to annoy"}, "synonyms": "felino"}
+        {
+            "definition": "a cat",
+            "idioms": {"dar la lata": "to annoy"},
+            "synonyms": "felino",
+        }
     )
     claude_sdk = MagicMock()
     claude_sdk.messages.parse = AsyncMock(return_value=parsed)
     claude_client._sdk_client, claude_client._sdk_loop_key = claude_sdk, "fixed"
 
-    with patch("idiomapp.utils.llm_utils.loop_key", return_value="fixed"), \
-         patch.object(OllamaClient, "_check_model_availability", return_value=True):
+    with patch("idiomapp.utils.llm_utils.loop_key", return_value="fixed"), patch.object(
+        OllamaClient, "_check_model_availability", return_value=True
+    ):
         via_ollama = await _get_llm_word_analysis("gato", "es", "NOUN", ollama_client)
         via_claude = await _get_llm_word_analysis("gato", "es", "NOUN", claude_client)
 
@@ -393,9 +433,11 @@ async def test_spacy_keys_survive_llm_merge():
     client.generate_json = AsyncMock(return_value={"definition": "a cat"})
     client.get_model_status = MagicMock(return_value={"available": True})
 
-    with patch("idiomapp.utils.nlp_utils.load_spacy_model", return_value=spacy.blank("es")):
+    with patch(
+        "idiomapp.utils.nlp_utils.load_spacy_model", return_value=spacy.blank("es")
+    ):
         analysis = await analyze_word_linguistics("gato", "es", client)
 
     assert analysis["word"] == "gato"
-    assert "pos" in analysis and "lemma" in analysis      # from spaCy
-    assert analysis["definition"] == "a cat"              # from the LLM
+    assert "pos" in analysis and "lemma" in analysis  # from spaCy
+    assert analysis["definition"] == "a cat"  # from the LLM

@@ -41,7 +41,11 @@ from idiomapp.config import (
     get_model_capabilities,
     anthropic_supports_effort,
 )
-from idiomapp.utils.ollama_utils import get_valid_ollama_host, get_available_models, pull_model_if_needed
+from idiomapp.utils.ollama_utils import (
+    get_valid_ollama_host,
+    get_available_models,
+    pull_model_if_needed,
+)
 
 # Set up logging using the new cached logger
 logger = get_logger("llm_utils")
@@ -51,7 +55,9 @@ class LLMClient(ABC):
     """Abstract base class for LLM clients (Ollama, OpenAI, Anthropic)."""
 
     @abstractmethod
-    async def generate_text(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+    async def generate_text(
+        self, prompt: str, system_prompt: Optional[str] = None
+    ) -> str:
         """Generate text from a prompt"""
 
     @abstractmethod
@@ -86,14 +92,16 @@ class LLMClient(ABC):
         model_name: str = None,
         api_key: str = None,
         organization: str = None,
-    ) -> 'LLMClient':
+    ) -> "LLMClient":
         """Factory method to create the appropriate LLM client"""
         provider = provider or settings.llm_provider.value
 
         if provider == LLMProvider.OLLAMA.value:
             return OllamaClient(model_name or settings.default_model)
         elif provider == LLMProvider.OPENAI.value:
-            return OpenAIClient(model_name or settings.openai_model, api_key, organization)
+            return OpenAIClient(
+                model_name or settings.openai_model, api_key, organization
+            )
         elif provider == LLMProvider.ANTHROPIC.value:
             return AnthropicClient(model_name or settings.anthropic_model, api_key)
         else:
@@ -110,7 +118,10 @@ class LLMClient(ABC):
         changes rather than being pinned at construction time.
         """
         key = loop_key()
-        if getattr(self, "_sdk_loop_key", None) != key or getattr(self, "_sdk_client", None) is None:
+        if (
+            getattr(self, "_sdk_loop_key", None) != key
+            or getattr(self, "_sdk_client", None) is None
+        ):
             self._sdk_client = factory()
             self._sdk_loop_key = key
             logger.debug(f"Built a new SDK client for event loop {key}")
@@ -152,13 +163,17 @@ class OllamaClient(LLMClient):
         mutates process-global state from Streamlit's per-session script threads -
         two sessions pointed at different hosts could read each other's value.
         """
-        return self._loop_bound_client(lambda: ollama.AsyncClient(host=self.ollama_host))
+        return self._loop_bound_client(
+            lambda: ollama.AsyncClient(host=self.ollama_host)
+        )
 
     def _check_model_availability(self):
         """Check if the model is available, and try to pull it if not."""
         # Check cache first to avoid repeated API calls
         if self.model_name in self._model_available_cache:
-            logger.debug(f"Using cached model availability for {self.model_name}: {self._model_available_cache[self.model_name]}")
+            logger.debug(
+                f"Using cached model availability for {self.model_name}: {self._model_available_cache[self.model_name]}"
+            )
             return self._model_available_cache[self.model_name]
 
         logger.debug(f"Checking availability of model: {self.model_name}")
@@ -173,7 +188,9 @@ class OllamaClient(LLMClient):
                 self._model_available_cache[self.model_name] = True
                 return True
             else:
-                logger.warning(f"Model {self.model_name} is not available, attempting to pull")
+                logger.warning(
+                    f"Model {self.model_name} is not available, attempting to pull"
+                )
                 pull_success = pull_model_if_needed(self.model_name)
                 self._model_available_cache[self.model_name] = pull_success
                 return pull_success
@@ -194,7 +211,7 @@ class OllamaClient(LLMClient):
             "provider": LLMProvider.OLLAMA.value,
             "model_name": self.model_name,
             "available": is_available,
-            "host": self.ollama_host
+            "host": self.ollama_host,
         }
 
     def _build_messages(self, prompt, system_prompt):
@@ -220,7 +237,9 @@ class OllamaClient(LLMClient):
             return "Error: Model not available. Please check if Ollama is running and the model is installed."
 
         try:
-            logger.debug(f"Generating text with Ollama model {self.model_name}, prompt={len(prompt)} chars")
+            logger.debug(
+                f"Generating text with Ollama model {self.model_name}, prompt={len(prompt)} chars"
+            )
 
             response = await self._client().chat(
                 model=self.model_name,
@@ -275,10 +294,10 @@ class OllamaClient(LLMClient):
     def _extract_content(response) -> str:
         """Pull the message text out of an Ollama response (dict or ChatResponse)."""
         try:
-            return response['message']['content']
+            return response["message"]["content"]
         except (KeyError, TypeError):
             try:
-                return response['response']
+                return response["response"]
             except (KeyError, TypeError):
                 logger.warning(f"Unexpected response structure: {type(response)}")
                 return str(response)
@@ -313,11 +332,13 @@ class OpenAIClient(LLMClient):
 
     def _client(self) -> AsyncOpenAI:
         """Get the async OpenAI client, rebuilt if the event loop changed."""
+
         def build():
             kwargs = {"api_key": self.api_key}
             if self.organization:
                 kwargs["organization"] = self.organization
             return AsyncOpenAI(**kwargs)
+
         return self._loop_bound_client(build)
 
     def get_model_status(self):
@@ -333,7 +354,7 @@ class OpenAIClient(LLMClient):
             "provider": LLMProvider.OPENAI.value,
             "model_name": self.model_name,
             "available": api_key_set,
-            "api_key_set": api_key_set
+            "api_key_set": api_key_set,
         }
 
     def _build_request_params(self, prompt, system_prompt) -> Dict[str, Any]:
@@ -377,7 +398,9 @@ class OpenAIClient(LLMClient):
         try:
             logger.debug(f"Generating text with OpenAI model {self.model_name}")
 
-            response: ChatCompletion = await self._client().chat.completions.create(**request_params)
+            response: ChatCompletion = await self._client().chat.completions.create(
+                **request_params
+            )
 
             generated_text = response.choices[0].message.content or ""
 
@@ -397,13 +420,19 @@ class OpenAIClient(LLMClient):
 
             # Some models only accept max_completion_tokens; retry once if that is why we failed.
             if "max_tokens" in error_msg and "max_completion_tokens" in error_msg:
-                logger.info(f"Attempting fallback with max_completion_tokens for model {self.model_name}")
+                logger.info(
+                    f"Attempting fallback with max_completion_tokens for model {self.model_name}"
+                )
                 try:
                     fallback_params = dict(request_params)
                     fallback_params.pop("max_tokens", None)
-                    fallback_params["max_completion_tokens"] = settings.openai_max_tokens
+                    fallback_params[
+                        "max_completion_tokens"
+                    ] = settings.openai_max_tokens
 
-                    response = await self._client().chat.completions.create(**fallback_params)
+                    response = await self._client().chat.completions.create(
+                        **fallback_params
+                    )
                     generated_text = response.choices[0].message.content or ""
 
                     logger.info("Fallback successful with max_completion_tokens")
@@ -431,7 +460,9 @@ class OpenAIClient(LLMClient):
             request_params = self._build_request_params(prompt, system_prompt)
             request_params["response_format"] = {"type": "json_object"}
 
-            response: ChatCompletion = await self._client().chat.completions.create(**request_params)
+            response: ChatCompletion = await self._client().chat.completions.create(
+                **request_params
+            )
 
             generated_text = response.choices[0].message.content or "{}"
             logger.debug(f"Generated JSON length: {len(generated_text)}")
@@ -495,7 +526,7 @@ class AnthropicClient(LLMClient):
             "provider": LLMProvider.ANTHROPIC.value,
             "model_name": self.model_name,
             "available": api_key_set,
-            "api_key_set": api_key_set
+            "api_key_set": api_key_set,
         }
 
     def _build_request_params(self, prompt, system_prompt) -> Dict[str, Any]:
@@ -614,8 +645,12 @@ class AnthropicClient(LLMClient):
 
             if schema is not None:
                 try:
-                    logger.debug(f"Generating structured JSON with Claude model {self.model_name}")
-                    response = await self._client().messages.parse(**params, output_format=schema)
+                    logger.debug(
+                        f"Generating structured JSON with Claude model {self.model_name}"
+                    )
+                    response = await self._client().messages.parse(
+                        **params, output_format=schema
+                    )
 
                     refusal = self._refusal_message(response)
                     if refusal:
@@ -625,7 +660,9 @@ class AnthropicClient(LLMClient):
                     if parsed is not None:
                         return parsed.model_dump(exclude_none=True, by_alias=True)
 
-                    logger.warning("Claude returned no structured output; retrying without a schema")
+                    logger.warning(
+                        "Claude returned no structured output; retrying without a schema"
+                    )
                 except anthropic.BadRequestError as e:
                     logger.warning(
                         f"Structured output rejected for {self.model_name} ({e.message}); "
@@ -639,7 +676,9 @@ class AnthropicClient(LLMClient):
             if refusal:
                 return {"error": refusal}
 
-            text = "".join(block.text for block in response.content if block.type == "text")
+            text = "".join(
+                block.text for block in response.content if block.type == "text"
+            )
             if not text:
                 return {"error": "Empty response from Claude"}
 
@@ -689,7 +728,9 @@ def get_openai_available_models(api_key: str = None, organization: str = None) -
             model.id for model in response.data if model.id.startswith("gpt-")
         )
 
-        logger.info(f"Successfully fetched {len(available_models)} available OpenAI models")
+        logger.info(
+            f"Successfully fetched {len(available_models)} available OpenAI models"
+        )
         return available_models or list(settings.openai_models_list)
 
     except Exception as e:
@@ -719,11 +760,14 @@ def get_anthropic_available_models(api_key: str = None) -> list:
         response = client.models.list(limit=100)
         available_models = [model.id for model in response.data]
 
-        logger.info(f"Successfully fetched {len(available_models)} available Claude models")
+        logger.info(
+            f"Successfully fetched {len(available_models)} available Claude models"
+        )
         return available_models or list(settings.anthropic_models_list)
 
     except Exception as e:
         logger.error(f"Error fetching Anthropic models: {str(e)}")
         return list(settings.anthropic_models_list)
+
 
 # Ollama-specific functions have been moved to ollama_utils.py

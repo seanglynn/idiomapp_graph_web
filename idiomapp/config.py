@@ -9,11 +9,13 @@ from typing import Any, Dict, List
 from pydantic import Field, computed_field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+
 # Define allowed LLM providers as an Enum for type safety
 class LLMProvider(str, Enum):
     OLLAMA = "ollama"
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
+
 
 class LogLevel(str, Enum):
     DEBUG = "DEBUG"
@@ -22,13 +24,14 @@ class LogLevel(str, Enum):
     ERROR = "ERROR"
     CRITICAL = "CRITICAL"
 
+
 class IdiomaAppSettings(BaseSettings):
     """Global settings for the IdiomApp application."""
-    
+
     # General configuration
     app_name: str = "IdiomApp"
     log_level: LogLevel = LogLevel.INFO
-    
+
     # Streamlit configuration
     streamlit_server_port: int = 8503
     streamlit_server_headless: bool = True
@@ -42,21 +45,28 @@ class IdiomaAppSettings(BaseSettings):
     streamlit_client_toolbar_mode: str = "minimal"
     streamlit_client_show_error_details: bool = True
     streamlit_wide_mode: bool = True
-    
+
     # LLM Provider configuration
     llm_provider: LLMProvider = LLMProvider.OLLAMA
-    
+
     # Ollama configuration
     ollama_host: str = "http://localhost:11434"
     default_model: str = "llama3.2:latest"
-    
+
     # OpenAI configuration
     openai_api_key: str = ""
     openai_organization: str = ""
     openai_model: str = "gpt-3.5-turbo"
-    openai_temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="Controls randomness in OpenAI responses (0.0-2.0)")
-    openai_max_tokens: int = Field(default=1024, ge=1, le=4096, description="Maximum tokens in OpenAI responses")
-    
+    openai_temperature: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=2.0,
+        description="Controls randomness in OpenAI responses (0.0-2.0)",
+    )
+    openai_max_tokens: int = Field(
+        default=1024, ge=1, le=4096, description="Maximum tokens in OpenAI responses"
+    )
+
     # Anthropic (Claude) configuration
     # Default is Haiku 4.5: fastest/cheapest, which suits short repeated translations.
     # Set ANTHROPIC_MODEL=claude-opus-5 (or pick it in the sidebar) for higher quality.
@@ -64,60 +74,74 @@ class IdiomaAppSettings(BaseSettings):
     # Claude Opus 5 / Sonnet 5. Use anthropic_effort instead (see ANTHROPIC_MODEL_CAPABILITIES).
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-haiku-4-5"
-    anthropic_max_tokens: int = Field(default=8192, ge=1, le=64000, description="Maximum tokens in Claude responses")
-    anthropic_effort: str = Field(default="low", description="Reasoning effort for models that support it")
+    anthropic_max_tokens: int = Field(
+        default=8192, ge=1, le=64000, description="Maximum tokens in Claude responses"
+    )
+    anthropic_effort: str = Field(
+        default="low", description="Reasoning effort for models that support it"
+    )
 
     # Model configurations by provider (will be parsed from comma-separated strings)
     ollama_models: str = "llama3.2:latest,llama3:latest,mistral:latest"
     openai_models: str = "gpt-3.5-turbo,gpt-4,gpt-4-turbo"
     anthropic_models: str = "claude-haiku-4-5,claude-sonnet-5,claude-opus-5"
-    
+
     # Language options (will be parsed from comma-separated strings)
     supported_languages: str = "en,es,ca"
     default_source_language: str = "en"
     default_target_languages: str = "es,ca"
-    
+
     # Co-occurrence network defaults
     default_window_size: int = 2
     default_min_frequency: int = 1
     default_pos_filter: str = "NOUN,VERB,ADJ"
-    
+
     @computed_field
     @property
     def ollama_models_list(self) -> List[str]:
         """Parse ollama_models from comma-separated string to list."""
-        return [item.strip() for item in self.ollama_models.split(',') if item.strip()]
-    
+        return [item.strip() for item in self.ollama_models.split(",") if item.strip()]
+
     @computed_field
     @property
     def openai_models_list(self) -> List[str]:
         """Parse openai_models from comma-separated string to list."""
-        return [item.strip() for item in self.openai_models.split(',') if item.strip()]
-    
+        return [item.strip() for item in self.openai_models.split(",") if item.strip()]
+
     @computed_field
     @property
     def anthropic_models_list(self) -> List[str]:
         """Parse anthropic_models from comma-separated string to list."""
-        return [item.strip() for item in self.anthropic_models.split(',') if item.strip()]
+        return [
+            item.strip() for item in self.anthropic_models.split(",") if item.strip()
+        ]
 
     @computed_field
     @property
     def supported_languages_list(self) -> List[str]:
         """Parse supported_languages from comma-separated string to list."""
-        return [item.strip() for item in self.supported_languages.split(',') if item.strip()]
-    
+        return [
+            item.strip() for item in self.supported_languages.split(",") if item.strip()
+        ]
+
     @computed_field
     @property
     def default_target_languages_list(self) -> List[str]:
         """Parse default_target_languages from comma-separated string to list."""
-        return [item.strip() for item in self.default_target_languages.split(',') if item.strip()]
-    
+        return [
+            item.strip()
+            for item in self.default_target_languages.split(",")
+            if item.strip()
+        ]
+
     @computed_field
     @property
     def default_pos_filter_list(self) -> List[str]:
         """Parse default_pos_filter from comma-separated string to list."""
-        return [item.strip() for item in self.default_pos_filter.split(',') if item.strip()]
-    
+        return [
+            item.strip() for item in self.default_pos_filter.split(",") if item.strip()
+        ]
+
     @computed_field
     @property
     def current_model(self) -> str:
@@ -129,7 +153,7 @@ class IdiomaAppSettings(BaseSettings):
         elif self.llm_provider == LLMProvider.ANTHROPIC:
             return self.anthropic_model
         return self.default_model
-    
+
     @computed_field
     @property
     def available_models(self) -> List[str]:
@@ -141,22 +165,22 @@ class IdiomaAppSettings(BaseSettings):
         elif self.llm_provider == LLMProvider.ANTHROPIC:
             return self.anthropic_models_list
         return []
-    
-    @model_validator(mode='after')
-    def validate_provider_specific_settings(self) -> 'IdiomaAppSettings':
+
+    @model_validator(mode="after")
+    def validate_provider_specific_settings(self) -> "IdiomaAppSettings":
         """Validate provider-specific settings."""
         if self.llm_provider == LLMProvider.OLLAMA:
             if not self.ollama_host:
                 self.ollama_host = "http://localhost:11434"
             if not self.default_model:
                 self.default_model = "llama3.2:latest"
-        
+
         elif self.llm_provider == LLMProvider.OPENAI:
             if not self.openai_model:
                 self.openai_model = "gpt-3.5-turbo"
-        
+
         return self
-    
+
     # Configure settings to use environment variables
     model_config = SettingsConfigDict(
         env_prefix="",  # Use environment variables without prefix
@@ -177,6 +201,7 @@ def get_settings() -> IdiomaAppSettings:
     """Return the global settings instance."""
     return settings
 
+
 def get_model_by_provider(provider: str) -> str:
     """Return the appropriate model for the given provider."""
     if provider.lower() == LLMProvider.OLLAMA.value:
@@ -186,6 +211,7 @@ def get_model_by_provider(provider: str) -> str:
     elif provider.lower() == LLMProvider.ANTHROPIC.value:
         return settings.anthropic_model
     raise ValueError(f"Invalid LLM provider: {provider}")
+
 
 def is_valid_provider(provider: str) -> bool:
     """Check if the given provider is valid."""
@@ -203,81 +229,78 @@ MODEL_CAPABILITIES: Dict[str, Dict[str, Any]] = {
         "supports_custom_temperature": False,
         "supports_custom_max_tokens": True,
         "description": "GPT-5 model with strict parameter requirements",
-        "notes": "Only supports default temperature (1.0), uses max_completion_tokens"
+        "notes": "Only supports default temperature (1.0), uses max_completion_tokens",
     },
     "gpt-5-mini": {
         "supports_max_completion_tokens": True,
         "supports_custom_temperature": False,
         "supports_custom_max_tokens": True,
         "description": "GPT-5 mini model with strict parameter requirements",
-        "notes": "Only supports default temperature (1.0), uses max_completion_tokens"
+        "notes": "Only supports default temperature (1.0), uses max_completion_tokens",
     },
-    
     # GPT-4o models - modern parameter support
     "gpt-4o": {
         "supports_max_completion_tokens": True,
         "supports_custom_temperature": True,
         "supports_custom_max_tokens": True,
         "description": "GPT-4o model with modern parameter support",
-        "notes": "Full parameter support including custom temperature"
+        "notes": "Full parameter support including custom temperature",
     },
     "gpt-4o-mini": {
         "supports_max_completion_tokens": True,
         "supports_custom_temperature": True,
         "supports_custom_max_tokens": True,
         "description": "GPT-4o mini model with modern parameter support",
-        "notes": "Full parameter support including custom temperature"
+        "notes": "Full parameter support including custom temperature",
     },
-    
     # Claude models
     "claude-3": {
         "supports_max_completion_tokens": True,
         "supports_custom_temperature": True,
         "supports_custom_max_tokens": True,
         "description": "Claude-3 model with modern parameter support",
-        "notes": "Full parameter support including custom temperature"
+        "notes": "Full parameter support including custom temperature",
     },
     "claude-3.5": {
         "supports_max_completion_tokens": True,
         "supports_custom_temperature": True,
         "supports_custom_max_tokens": True,
         "description": "Claude-3.5 model with modern parameter support",
-        "notes": "Full parameter support including custom temperature"
+        "notes": "Full parameter support including custom temperature",
     },
-    
     # Standard GPT models
     "gpt-4": {
         "supports_max_completion_tokens": False,
         "supports_custom_temperature": True,
         "supports_custom_max_tokens": True,
         "description": "Standard GPT-4 model",
-        "notes": "Uses max_tokens, supports custom temperature"
+        "notes": "Uses max_tokens, supports custom temperature",
     },
     "gpt-3.5": {
         "supports_max_completion_tokens": False,
         "supports_custom_temperature": True,
         "supports_custom_max_tokens": True,
         "description": "Standard GPT-3.5 model",
-        "notes": "Uses max_tokens, supports custom temperature"
+        "notes": "Uses max_tokens, supports custom temperature",
     },
-    
     # Legacy models
     "gpt-3": {
         "supports_max_completion_tokens": False,
         "supports_custom_temperature": True,
         "supports_custom_max_tokens": True,
         "description": "Legacy GPT-3 model",
-        "notes": "Uses max_tokens, supports custom temperature"
-    }
+        "notes": "Uses max_tokens, supports custom temperature",
+    },
 }
+
 
 def get_model_capabilities(model_name: str) -> Dict[str, Any]:
     """
     Get OpenAI request-parameter capabilities for a specific model.
-    
+
     Args:
         model_name: The name of the model to get capabilities for
-        
+
     Returns:
         dict: Model capabilities including parameter support
     """
@@ -285,7 +308,7 @@ def get_model_capabilities(model_name: str) -> Dict[str, Any]:
     for model_pattern, capabilities in MODEL_CAPABILITIES.items():
         if model_pattern in model_name:
             return capabilities
-    
+
     # Fallback: infer capabilities from model name patterns
     if any(prefix in model_name for prefix in ["gpt-5"]):
         return {
@@ -293,7 +316,7 @@ def get_model_capabilities(model_name: str) -> Dict[str, Any]:
             "supports_custom_temperature": False,
             "supports_custom_max_tokens": True,
             "description": "Inferred GPT-5 capabilities",
-            "notes": "Inferred from model name pattern"
+            "notes": "Inferred from model name pattern",
         }
     elif any(prefix in model_name for prefix in ["gpt-4o", "claude-3"]):
         return {
@@ -301,7 +324,7 @@ def get_model_capabilities(model_name: str) -> Dict[str, Any]:
             "supports_custom_temperature": True,
             "supports_custom_max_tokens": True,
             "description": "Inferred modern model capabilities",
-            "notes": "Inferred from model name pattern"
+            "notes": "Inferred from model name pattern",
         }
     else:
         # Default to legacy model capabilities
@@ -310,29 +333,32 @@ def get_model_capabilities(model_name: str) -> Dict[str, Any]:
             "supports_custom_temperature": True,
             "supports_custom_max_tokens": True,
             "description": "Default legacy model capabilities",
-            "notes": "Default fallback for unknown models"
+            "notes": "Default fallback for unknown models",
         }
+
 
 def is_model_supported(model_name: str) -> bool:
     """
     Check if a model is supported by checking if we have capability information.
-    
+
     Args:
         model_name: The name of the model to check
-        
+
     Returns:
         bool: True if the model is supported
     """
     return any(pattern in model_name for pattern in MODEL_CAPABILITIES.keys())
 
+
 def get_supported_models() -> list:
     """
     Get a list of all supported model patterns.
-    
+
     Returns:
         list: List of supported model patterns
     """
-    return list(MODEL_CAPABILITIES.keys()) 
+    return list(MODEL_CAPABILITIES.keys())
+
 
 # ---------------------------------------------------------------------------
 # Anthropic (Claude) model capabilities
@@ -385,72 +411,80 @@ def get_anthropic_model_capabilities(model_name: str) -> Dict[str, Any]:
 
 def anthropic_supports_effort(model_name: str) -> bool:
     """Whether `output_config={"effort": ...}` may be sent for this Claude model."""
-    return bool(get_anthropic_model_capabilities(model_name).get("supports_effort", False))
+    return bool(
+        get_anthropic_model_capabilities(model_name).get("supports_effort", False)
+    )
+
 
 # Relation type colors for graph edges
 RELATION_COLORS: Dict[str, str] = {
-    "synonym": "#00FF00",      # Green for synonyms
-    "antonym": "#FF0000",      # Red for antonyms
-    "hypernym": "#FFA500",     # Orange for hypernyms
-    "hyponym": "#FFFF00",      # Yellow for hyponyms
-    "contextual": "#00FFFF",   # Cyan for contextual
+    "synonym": "#00FF00",  # Green for synonyms
+    "antonym": "#FF0000",  # Red for antonyms
+    "hypernym": "#FFA500",  # Orange for hypernyms
+    "hyponym": "#FFFF00",  # Yellow for hyponyms
+    "contextual": "#00FFFF",  # Cyan for contextual
     "common_prefix": "#A0A0FF",  # Light blue for common prefix
     "common_suffix": "#FFA0FF",  # Light purple for common suffix
     "char_similarity": "#A0FFA0",  # Light green for character similarity
-    "related_term": "#A0FFFF",   # Light cyan for related terms
-    "weak_relation": "#AAAAAA"   # Gray for weak relations
+    "related_term": "#A0FFFF",  # Light cyan for related terms
+    "weak_relation": "#AAAAAA",  # Gray for weak relations
 }
 
 # Language configuration constants
 LANGUAGE_MAP: Dict[str, Dict[str, str]] = {
     "en": {"name": "English", "flag": "🇬🇧", "tts_code": "en"},
     "es": {"name": "Spanish", "flag": "🇪🇸", "tts_code": "es"},
-    "ca": {"name": "Catalan", "flag": "🏴󠁥󠁳󠁣󠁴󠁿", "tts_code": "es", "tts_note": "(via Spanish TTS)"}
+    "ca": {
+        "name": "Catalan",
+        "flag": "🏴󠁥󠁳󠁣󠁴󠁿",
+        "tts_code": "es",
+        "tts_note": "(via Spanish TTS)",
+    },
 }
 
 # TTS language mapping
 TTS_LANGUAGE_NAMES: Dict[str, str] = {
-    'en': 'English',
-    'es': 'Spanish',
-    'ca': 'Catalan (via Spanish TTS)'
+    "en": "English",
+    "es": "Spanish",
+    "ca": "Catalan (via Spanish TTS)",
 }
 
 # TTS language codes for gTTS
 TTS_LANG_CODES: Dict[str, str] = {
     "en": "en",
     "es": "es",
-    "ca": "es"  # Use Spanish for Catalan (gTTS limitation)
+    "ca": "es",  # Use Spanish for Catalan (gTTS limitation)
 }
 
 # Language markers for translation extraction
 LANGUAGE_MARKERS: Dict[str, str] = {
     "en": "English 🇬🇧:",
     "es": "Spanish 🇪🇸:",
-    "ca": "Catalan 🏴󠁥󠁳󠁣󠁴󠁿:"
+    "ca": "Catalan 🏴󠁥󠁳󠁣󠁴󠁿:",
 }
 
 # Part of speech border colors for visualization
 POS_BORDER_COLORS: Dict[str, str] = {
-    "noun": "#FF9500",      # Orange for nouns
-    "verb": "#4CD964",      # Green for verbs
+    "noun": "#FF9500",  # Orange for nouns
+    "verb": "#4CD964",  # Green for verbs
     "adjective": "#5AC8FA",  # Blue for adjectives
-    "adverb": "#FFCC00",    # Yellow for adverbs
-    "pronoun": "#FF3B30",   # Red for pronouns
+    "adverb": "#FFCC00",  # Yellow for adverbs
+    "pronoun": "#FF3B30",  # Red for pronouns
     "preposition": "#FF2D55",  # Pink for prepositions
     "conjunction": "#5856D6",  # Purple for conjunctions
     "interjection": "#FF9500",  # Orange for interjections
     "determiner": "#C7C7CC",  # Gray for determiners
-    "unknown": "#4361EE"    # Default blue for unknown
+    "unknown": "#4361EE",  # Default blue for unknown
 }
 
 # Graph group colors for different languages
 GROUP_COLORS: Dict[str, str] = {
-    "en": "#4361EE",    # Blue for English
-    "es": "#FFD700",    # Yellow for Spanish
-    "ca": "#FF3B30",    # Red for Catalan
+    "en": "#4361EE",  # Blue for English
+    "es": "#FFD700",  # Yellow for Spanish
+    "ca": "#FF3B30",  # Red for Catalan
     "en-related": "#90E0EF",  # Light blue for English related
     "es-related": "#FFF1A3",  # Light yellow for Spanish related
-    "ca-related": "#FF8C7C"   # Light red for Catalan related
+    "ca-related": "#FF8C7C",  # Light red for Catalan related
 }
 
 # SpaCy language model mapping - Updated to use latest spaCy v3 models
@@ -458,5 +492,5 @@ GROUP_COLORS: Dict[str, str] = {
 LANG_MODELS: Dict[str, str] = {
     "en": "en_core_web_sm",
     "es": "es_core_news_sm",
-    "ca": "ca_core_news_sm"
-} 
+    "ca": "ca_core_news_sm",
+}

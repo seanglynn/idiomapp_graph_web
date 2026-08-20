@@ -56,7 +56,8 @@ def _to_entries(value: Any) -> Any:
                 else:
                     # A single-pair dict inside a list, e.g. [{"expr": "meaning"}]
                     entries.extend(
-                        {"term": str(k), "gloss": _stringify(v)} for k, v in item.items()
+                        {"term": str(k), "gloss": _stringify(v)}
+                        for k, v in item.items()
                     )
             else:
                 entries.append({"term": str(item), "gloss": None})

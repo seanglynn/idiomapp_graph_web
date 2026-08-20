@@ -35,7 +35,7 @@ def extract_json(response: str) -> Optional[Dict[str, Any]]:
         return None
 
     # 1. Fenced code block.
-    fenced = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', response, re.DOTALL)
+    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", response, re.DOTALL)
     if fenced:
         try:
             return json.loads(fenced.group(1))
@@ -54,8 +54,8 @@ def extract_json(response: str) -> Optional[Dict[str, Any]]:
         pass
 
     # 3. Repair the common malformations and retry once.
-    repaired = re.sub(r',\s*([}\]])', r'\1', json_str)   # trailing commas
-    repaired = repaired.replace("'", '"')                # single-quoted strings
+    repaired = re.sub(r",\s*([}\]])", r"\1", json_str)  # trailing commas
+    repaired = repaired.replace("'", '"')  # single-quoted strings
     try:
         return json.loads(repaired)
     except json.JSONDecodeError as e:
@@ -68,12 +68,12 @@ def _first_balanced_object(text: str) -> Optional[str]:
     depth = 0
     start = -1
     for i, char in enumerate(text):
-        if char == '{':
+        if char == "{":
             if depth == 0:
                 start = i
             depth += 1
-        elif char == '}':
+        elif char == "}":
             depth -= 1
             if depth == 0 and start != -1:
-                return text[start:i + 1]
+                return text[start : i + 1]
     return None

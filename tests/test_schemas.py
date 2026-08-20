@@ -9,22 +9,40 @@ a regression here shows up as a stringified dict in the UI rather than an except
 
 import pytest
 
-from idiomapp.utils.schemas import Entry, Grammar, Pronunciation, Translation, WordAnalysis
+from idiomapp.utils.schemas import (
+    Entry,
+    Grammar,
+    Pronunciation,
+    Translation,
+    WordAnalysis,
+)
 
 # Every shape a provider has been seen to emit for a "list or mapping" field.
 SHAPES = {
     "mapping": ({"dar la lata": "to annoy"}, [("dar la lata", "to annoy")]),
-    "list_of_str": (["dar la lata", "ni idea"], [("dar la lata", None), ("ni idea", None)]),
+    "list_of_str": (
+        ["dar la lata", "ni idea"],
+        [("dar la lata", None), ("ni idea", None)],
+    ),
     "list_of_dict": ([{"dar la lata": "to annoy"}], [("dar la lata", "to annoy")]),
-    "entry_dicts": ([{"term": "dar la lata", "gloss": "to annoy"}], [("dar la lata", "to annoy")]),
+    "entry_dicts": (
+        [{"term": "dar la lata", "gloss": "to annoy"}],
+        [("dar la lata", "to annoy")],
+    ),
     "bare_string": ("dar la lata", [("dar la lata", None)]),
     "null": (None, []),
 }
 
 # Fields declared as Entries on WordAnalysis.
 ENTRY_FIELDS = [
-    "idioms", "false_friends", "cognates", "conjugations",
-    "articles", "gender_forms", "comparison", "related_forms",
+    "idioms",
+    "false_friends",
+    "cognates",
+    "conjugations",
+    "articles",
+    "gender_forms",
+    "comparison",
+    "related_forms",
 ]
 
 
@@ -46,10 +64,10 @@ def test_missing_entry_field_is_empty_list():
     "raw, expected",
     [
         (["a", "b"], ["a", "b"]),
-        ("a", ["a"]),                       # bare string, not chars
-        ({"x": "y"}, ["x: y"]),             # mapping flattened readably
+        ("a", ["a"]),  # bare string, not chars
+        ({"x": "y"}, ["x: y"]),  # mapping flattened readably
         (None, []),
-        ([1, 2], ["1", "2"]),               # non-strings coerced
+        ([1, 2], ["1", "2"]),  # non-strings coerced
     ],
 )
 def test_str_list_fields_normalise(raw, expected):
@@ -77,10 +95,12 @@ def test_register_alias_round_trips():
 
 
 def test_nested_blocks_flatten_onto_top_level():
-    model = WordAnalysis.model_validate({
-        "grammar": {"gender": "masculine", "conjugations": {"present": "es"}},
-        "pronunciation": {"ipa": "ˈɡa.to"},
-    })
+    model = WordAnalysis.model_validate(
+        {
+            "grammar": {"gender": "masculine", "conjugations": {"present": "es"}},
+            "pronunciation": {"ipa": "ˈɡa.to"},
+        }
+    )
     display = model.to_display_dict()
     assert display["gender"] == "masculine"
     assert display["ipa"] == "ˈɡa.to"
@@ -90,16 +110,20 @@ def test_nested_blocks_flatten_onto_top_level():
 
 
 def test_top_level_wins_over_nested():
-    model = WordAnalysis.model_validate({
-        "gender": "feminine",
-        "grammar": {"gender": "masculine"},
-    })
+    model = WordAnalysis.model_validate(
+        {
+            "gender": "feminine",
+            "grammar": {"gender": "masculine"},
+        }
+    )
     assert model.to_display_dict()["gender"] == "feminine"
 
 
 def test_display_dict_drops_empties():
     """Tab gating keys off presence, so empty values must not appear."""
-    display = WordAnalysis.model_validate({"definition": "x", "synonyms": []}).to_display_dict()
+    display = WordAnalysis.model_validate(
+        {"definition": "x", "synonyms": []}
+    ).to_display_dict()
     assert "synonyms" not in display
     assert display["definition"] == "x"
 
