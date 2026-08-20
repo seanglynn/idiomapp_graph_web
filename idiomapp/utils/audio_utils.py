@@ -6,7 +6,6 @@ Includes text-to-speech and audio processing functions.
 import io
 import base64
 import logging
-from typing import Optional
 from gtts import gTTS
 
 from idiomapp.config import TTS_LANG_CODES, LANGUAGE_MARKERS
@@ -172,7 +171,7 @@ def generate_audio(text: str, source_language: str = "unknown", target_language:
     # Validate inputs
     if not text or not text.strip():
         logger.error("No text provided for audio generation")
-        return f"<span style='color:orange'>⚠️ No text available for audio generation</span>"
+        return "<span style='color:orange'>⚠️ No text available for audio generation</span>"
     
     if target_language not in TTS_LANG_CODES:
         logger.error(f"Unsupported target language for TTS: {target_language}")
@@ -198,7 +197,7 @@ def generate_audio(text: str, source_language: str = "unknown", target_language:
             return audio_html
         else:
             logger.error("Audio file generation failed")
-            return f"<span style='color:red'>❌ Audio generation failed</span>"
+            return "<span style='color:red'>❌ Audio generation failed</span>"
             
     except Exception as e:
         logger.error(f"Error generating audio: {str(e)}")

@@ -1,4 +1,7 @@
 # IdiomApp
+
+[![CI](https://github.com/seanglynn/idiomapp_graph_web/actions/workflows/ci.yml/badge.svg)](https://github.com/seanglynn/idiomapp_graph_web/actions/workflows/ci.yml)
+
 Visualizing linguistic connections through interactive graphs and networks.
 
 **¿Qué es esto?** 

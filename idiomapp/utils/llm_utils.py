@@ -595,9 +595,15 @@ class AnthropicClient(LLMClient):
         """
         Generate a JSON object from the Claude model.
 
-        When a Pydantic `schema` is supplied, structured output is used so the
-        response is guaranteed to parse. Without one, the model is prompted for JSON
-        and the reply is parsed tolerantly.
+        With a Pydantic `schema`, structured output constrains the response so it is
+        guaranteed to parse. The SDK derives the API schema from the model itself
+        (stripping defaults, setting additionalProperties: false), so the tolerant
+        model can be passed as-is.
+
+        Structured output has not been exercised against every model this app offers,
+        so a schema rejected as a bad request falls back to an unconstrained call
+        once rather than failing the feature. Callers validate the result themselves,
+        which keeps every provider's output on the same path.
         """
         if not self.api_key:
             logger.error("Anthropic API key not set")
@@ -607,17 +613,24 @@ class AnthropicClient(LLMClient):
             params = self._build_request_params(prompt, system_prompt)
 
             if schema is not None:
-                logger.debug(f"Generating structured JSON with Claude model {self.model_name}")
-                response = await self._client().messages.parse(**params, output_format=schema)
+                try:
+                    logger.debug(f"Generating structured JSON with Claude model {self.model_name}")
+                    response = await self._client().messages.parse(**params, output_format=schema)
 
-                refusal = self._refusal_message(response)
-                if refusal:
-                    return {"error": refusal}
+                    refusal = self._refusal_message(response)
+                    if refusal:
+                        return {"error": refusal}
 
-                parsed = response.parsed_output
-                if parsed is None:
-                    return {"error": "Claude returned no structured output"}
-                return parsed.model_dump(exclude_none=True)
+                    parsed = response.parsed_output
+                    if parsed is not None:
+                        return parsed.model_dump(exclude_none=True, by_alias=True)
+
+                    logger.warning("Claude returned no structured output; retrying without a schema")
+                except anthropic.BadRequestError as e:
+                    logger.warning(
+                        f"Structured output rejected for {self.model_name} ({e.message}); "
+                        f"retrying without a schema"
+                    )
 
             logger.debug(f"Generating JSON with Claude model {self.model_name}")
             response = await self._client().messages.create(**params)

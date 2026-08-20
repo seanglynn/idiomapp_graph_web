@@ -1,7 +1,6 @@
 import ollama
 import time
 import os
-from typing import List, Dict, Any
 from idiomapp.utils.logging_utils import get_logger
 from idiomapp.config import settings  # Import the global config
 import httpx
@@ -444,8 +443,8 @@ class OllamaClient:
             if e.status_code == 404:
                 # Model not found
                 error_msg += f"\n\nThe model '{self.model_name}' needs to be downloaded first."
-                error_msg += f"\nRun these commands in your terminal:"
-                error_msg += f"\n  1. docker exec -it idiomapp-ollama /bin/bash"
+                error_msg += "\nRun these commands in your terminal:"
+                error_msg += "\n  1. docker exec -it idiomapp-ollama /bin/bash"
                 error_msg += f"\n  2. ollama pull {self.model_name}"
             
             logger.error(error_msg)

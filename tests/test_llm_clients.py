@@ -279,3 +279,123 @@ def test_wire_body_for_opus_carries_effort():
     body = _capture_request_body("claude-opus-5")
     assert body["output_config"]["effort"]
     assert "temperature" not in body
+
+
+# --------------------------------------------------------------------------
+# Schema handling and provider parity
+# --------------------------------------------------------------------------
+def test_claude_401_maps_to_error_string():
+    """Pins the mapping confirmed live against api.anthropic.com with a dummy key."""
+    import anthropic
+    import httpx
+
+    err = anthropic.AuthenticationError(
+        message="API key is invalid.",
+        response=httpx.Response(401, request=httpx.Request("POST", "https://x")),
+        body=None,
+    )
+    assert AnthropicClient._describe_error(err) == "Error: Invalid Anthropic API key."
+
+
+@pytest.mark.asyncio
+async def test_claude_falls_back_when_schema_is_rejected():
+    """A schema the API refuses must not kill the feature - retry unconstrained once."""
+    import anthropic
+    import httpx
+
+    from idiomapp.utils.schemas import WordAnalysis
+
+    client = AnthropicClient("claude-haiku-4-5", api_key="k")
+    sdk = MagicMock()
+    sdk.messages.parse = AsyncMock(side_effect=anthropic.BadRequestError(
+        message="output_config.format is not supported",
+        response=httpx.Response(400, request=httpx.Request("POST", "https://x")),
+        body=None,
+    ))
+    sdk.messages.create = AsyncMock(return_value=_fake_message('{"definition": "a cat"}'))
+    client._sdk_client, client._sdk_loop_key = sdk, "fixed"
+
+    with patch("idiomapp.utils.llm_utils.loop_key", return_value="fixed"):
+        result = await client.generate_json("analyse", schema=WordAnalysis)
+
+    assert result == {"definition": "a cat"}
+    assert sdk.messages.parse.await_count == 1
+    assert sdk.messages.create.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_claude_schema_path_returns_canonical_dict():
+    from idiomapp.utils.schemas import WordAnalysis
+
+    client = AnthropicClient("claude-opus-5", api_key="k")
+    parsed = MagicMock()
+    parsed.stop_reason = "end_turn"
+    parsed.parsed_output = WordAnalysis.model_validate({"idioms": {"dar la lata": "to annoy"}})
+
+    sdk = MagicMock()
+    sdk.messages.parse = AsyncMock(return_value=parsed)
+    client._sdk_client, client._sdk_loop_key = sdk, "fixed"
+
+    with patch("idiomapp.utils.llm_utils.loop_key", return_value="fixed"):
+        result = await client.generate_json("analyse", schema=WordAnalysis)
+
+    assert result["idioms"] == [{"term": "dar la lata", "gloss": "to annoy"}]
+    assert sdk.messages.parse.await_args.kwargs["output_format"] is WordAnalysis
+
+
+@pytest.mark.asyncio
+async def test_providers_agree_on_shape():
+    """The same awkward payload through Ollama and Claude produces the same analysis."""
+    from idiomapp.utils.nlp_utils import _get_llm_word_analysis
+    from idiomapp.utils.schemas import WordAnalysis
+
+    payload = '{"definition":"a cat","idioms":{"dar la lata":"to annoy"},"synonyms":"felino"}'
+
+    with patch("idiomapp.utils.llm_utils.get_available_models", return_value=["m"]):
+        ollama_client = OllamaClient("m")
+    ollama_sdk = MagicMock()
+    ollama_sdk.chat = AsyncMock(return_value={"message": {"content": payload}})
+    ollama_client._sdk_client, ollama_client._sdk_loop_key = ollama_sdk, "fixed"
+
+    claude_client = AnthropicClient("claude-opus-5", api_key="k")
+    parsed = MagicMock()
+    parsed.stop_reason = "end_turn"
+    parsed.parsed_output = WordAnalysis.model_validate(
+        {"definition": "a cat", "idioms": {"dar la lata": "to annoy"}, "synonyms": "felino"}
+    )
+    claude_sdk = MagicMock()
+    claude_sdk.messages.parse = AsyncMock(return_value=parsed)
+    claude_client._sdk_client, claude_client._sdk_loop_key = claude_sdk, "fixed"
+
+    with patch("idiomapp.utils.llm_utils.loop_key", return_value="fixed"), \
+         patch.object(OllamaClient, "_check_model_availability", return_value=True):
+        via_ollama = await _get_llm_word_analysis("gato", "es", "NOUN", ollama_client)
+        via_claude = await _get_llm_word_analysis("gato", "es", "NOUN", claude_client)
+
+    assert via_ollama == via_claude
+    assert via_ollama["idioms"] == [{"term": "dar la lata", "gloss": "to annoy"}]
+    assert via_ollama["synonyms"] == ["felino"]
+
+
+@pytest.mark.asyncio
+async def test_spacy_keys_survive_llm_merge():
+    """
+    The LLM half is merged onto spaCy's, not substituted for it.
+
+    spaCy is stubbed with a blank pipeline so the suite never reaches for a model
+    download - CI has no pretrained models installed and must stay offline.
+    """
+    import spacy
+
+    from idiomapp.utils.nlp_utils import analyze_word_linguistics
+
+    client = MagicMock()
+    client.generate_json = AsyncMock(return_value={"definition": "a cat"})
+    client.get_model_status = MagicMock(return_value={"available": True})
+
+    with patch("idiomapp.utils.nlp_utils.load_spacy_model", return_value=spacy.blank("es")):
+        analysis = await analyze_word_linguistics("gato", "es", client)
+
+    assert analysis["word"] == "gato"
+    assert "pos" in analysis and "lemma" in analysis      # from spaCy
+    assert analysis["definition"] == "a cat"              # from the LLM

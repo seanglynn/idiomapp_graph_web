@@ -4,10 +4,9 @@ Global configuration module for Idiomapp.
 This module uses pydantic-settings to manage configuration from environment variables and defaults.
 """
 
-import os
 from enum import Enum
-from typing import Dict, List, Optional, Union, Any, Callable
-from pydantic import Field, computed_field, model_validator, field_validator
+from typing import Any, Dict, List
+from pydantic import Field, computed_field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Define allowed LLM providers as an Enum for type safety
@@ -395,9 +394,9 @@ RELATION_COLORS: Dict[str, str] = {
     "hypernym": "#FFA500",     # Orange for hypernyms
     "hyponym": "#FFFF00",      # Yellow for hyponyms
     "contextual": "#00FFFF",   # Cyan for contextual
-    "common_prefix": "#A0A0FF", # Light blue for common prefix
-    "common_suffix": "#FFA0FF", # Light purple for common suffix
-    "char_similarity": "#A0FFA0", # Light green for character similarity
+    "common_prefix": "#A0A0FF",  # Light blue for common prefix
+    "common_suffix": "#FFA0FF",  # Light purple for common suffix
+    "char_similarity": "#A0FFA0",  # Light green for character similarity
     "related_term": "#A0FFFF",   # Light cyan for related terms
     "weak_relation": "#AAAAAA"   # Gray for weak relations
 }
@@ -434,12 +433,12 @@ LANGUAGE_MARKERS: Dict[str, str] = {
 POS_BORDER_COLORS: Dict[str, str] = {
     "noun": "#FF9500",      # Orange for nouns
     "verb": "#4CD964",      # Green for verbs
-    "adjective": "#5AC8FA", # Blue for adjectives
+    "adjective": "#5AC8FA",  # Blue for adjectives
     "adverb": "#FFCC00",    # Yellow for adverbs
     "pronoun": "#FF3B30",   # Red for pronouns
-    "preposition": "#FF2D55", # Pink for prepositions
-    "conjunction": "#5856D6", # Purple for conjunctions
-    "interjection": "#FF9500", # Orange for interjections
+    "preposition": "#FF2D55",  # Pink for prepositions
+    "conjunction": "#5856D6",  # Purple for conjunctions
+    "interjection": "#FF9500",  # Orange for interjections
     "determiner": "#C7C7CC",  # Gray for determiners
     "unknown": "#4361EE"    # Default blue for unknown
 }

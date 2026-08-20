@@ -2,10 +2,8 @@
 Natural Language Processing utilities.
 Uses textacy and spaCy for advanced NLP capabilities.
 """
-import os
 import re
 import logging
-import tempfile
 from typing import List, Dict, Any, Optional
 
 # NLP libraries
@@ -14,10 +12,12 @@ import textacy
 from textacy.extract.keyterms import textrank
 from textacy.representations.network import build_cooccurrence_network
 import networkx as nx
-from pyvis.network import Network
 from langdetect import detect, LangDetectException
 # Color scheme imported from central config
+from pydantic import ValidationError
+
 from idiomapp.config import GROUP_COLORS as LANGUAGE_COLORS, LANG_MODELS
+from idiomapp.utils.schemas import WordAnalysis
 
 # Setup logging
 logger = logging.getLogger(__name__)
@@ -56,7 +56,6 @@ def load_spacy_model(language: str) -> spacy.language.Language:
     Returns:
         Loaded spaCy language model
     """
-    global _MODEL_CACHE
     
     # Get the appropriate model name
     model_name = LANG_MODELS.get(language, "en_core_web_sm")
@@ -163,13 +162,11 @@ def _try_alternative_models(language: str) -> Optional[spacy.language.Language]:
 
 def clear_model_cache():
     """Clear the SpaCy model cache to force reloading of models."""
-    global _MODEL_CACHE
     _MODEL_CACHE.clear()
     logger.info("SpaCy model cache cleared")
 
 def get_model_status():
     """Get the status of loaded SpaCy models."""
-    global _MODEL_CACHE
     status = {}
     for lang, model in _MODEL_CACHE.items():
         if hasattr(model, 'vocab') and len(model.vocab) > 1000:
@@ -566,7 +563,7 @@ def calculate_word_similarity(word1: str, word2: str, lang1: str, lang2: str) ->
             language_pair_boost = {
                 ("en", "es"): 0.1,  # English-Spanish
                 ("es", "en"): 0.1,
-                ("en", "ca"): 0.05, # English-Catalan
+                ("en", "ca"): 0.05,  # English-Catalan
                 ("ca", "en"): 0.05,
                 ("es", "ca"): 0.2,  # Spanish-Catalan (very similar)
                 ("ca", "es"): 0.2
@@ -790,7 +787,7 @@ def _calculate_fallback_similarity(word1: str, word2: str, lang1: str, lang2: st
     language_pair_boost = {
         ("en", "es"): 0.1,  # English-Spanish
         ("es", "en"): 0.1,
-        ("en", "ca"): 0.05, # English-Catalan
+        ("en", "ca"): 0.05,  # English-Catalan
         ("ca", "en"): 0.05,
         ("es", "ca"): 0.2,  # Spanish-Catalan (more similar)
         ("ca", "es"): 0.2
@@ -973,152 +970,6 @@ def _build_simple_cooccurrence_network(text: str, window_size: int = 2, min_freq
     
     logger.info(f"Built simple co-occurrence network with {len(G.nodes)} nodes and {len(G.edges)} edges")
     return G
-
-def visualize_cooccurrence_network(graph: nx.Graph, lang_code: Optional[str] = None) -> str:
-    """
-    Visualize a word co-occurrence network using Pyvis.
-    
-    Args:
-        graph: networkx.Graph with word co-occurrence network
-        lang_code: Language code for color coding (optional)
-    
-    Returns:
-        Pyvis network visualization HTML
-    """
-    try:
-        # Create a network with dark mode friendly colors
-        net = Network(height="600px", width="100%", bgcolor="#0E1117", font_color="#FAFAFA")
-        
-        # Set options for visualization
-        net.barnes_hut()
-        net.set_options("""
-        {
-          "nodes": {
-            "borderWidth": 2,
-            "borderWidthSelected": 4,
-            "color": {
-              "border": "#4361EE",
-              "background": "#4CC9F0"
-            },
-            "font": {
-              "size": 16,
-              "face": "Arial",
-              "color": "#FAFAFA"
-            },
-            "shadow": true
-          },
-          "edges": {
-            "color": {
-              "color": "#AAAAAA",
-              "highlight": "#F72585",
-              "hover": "#F72585"
-            },
-            "smooth": {
-              "enabled": true,
-              "type": "dynamic"
-            },
-            "shadow": false,
-            "width": 2
-          },
-          "physics": {
-            "barnesHut": {
-              "gravitationalConstant": -5000,
-              "centralGravity": 0.3,
-              "springLength": 95,
-              "springConstant": 0.04
-            },
-            "stabilization": {
-              "iterations": 1000
-            }
-          },
-          "interaction": {
-            "dragNodes": true,
-            "hideEdgesOnDrag": false,
-            "hideNodesOnDrag": false,
-            "hover": true
-          }
-        }
-        """)
-        
-        # Language-specific colors
-        lang_colors = {
-            None: "#4CC9F0"   # Default light blue if no language specified
-        }
-        
-        # Check if graph has nodes
-        if len(graph.nodes()) == 0:
-            logger.warning("Co-occurrence graph is empty - no nodes to display")
-            return "<div class='alert alert-warning'>No co-occurrence data available for this text. Try a longer text or adjust co-occurrence settings.</div>"
-        
-        # Convert node IDs to strings to ensure compatibility with Pyvis
-        nodes_to_add = []
-        for node in graph.nodes():
-            # Make sure node is a string
-            node_id = str(node)
-            
-            # Get node weight (degree in the graph)
-            size = 20 + (graph.degree(node) * 3)
-            
-            # Create tooltip with node information
-            tooltip = f"Word: {node}; Co-occurrences: {graph.degree(node)}"
-            
-            # Get color for the language from our shared function
-            node_color = get_language_color(lang_code) if lang_code else "#4CC9F0"
-            
-            # Add to our list of nodes to add
-            nodes_to_add.append((node_id, {
-                "label": node_id,
-                "title": tooltip,
-                "color": {"background": node_color, "border": "#4361EE"},
-                "size": size
-            }))
-            
-        # Add all nodes
-        for node_id, node_data in nodes_to_add:
-            net.add_node(
-                node_id, 
-                label=node_data["label"],
-                title=node_data["title"],
-                color=node_data["color"],
-                size=node_data["size"]
-            )
-        
-        # Add edges with weights - ensure string conversion for source/target
-        for source, target, data in graph.edges(data=True):
-            # Convert source and target to strings
-            source_id = str(source)
-            target_id = str(target)
-            
-            # Get edge weight (count or other measure)
-            weight = data.get('weight', 1)
-            width = 1 + (weight / 2)  # Scale width based on weight
-            
-            # Add the edge
-            net.add_edge(
-                source_id,
-                target_id,
-                title=f"Co-occurrence: {weight}",
-                width=width,
-                color="#FFFFFF" if weight > 2 else "#AAAAAA"
-            )
-        
-        # TODO AVOID: Create a temporary HTML file
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.html') as tmpfile:
-            path = tmpfile.name
-            net.save_graph(path)
-        
-        # Read the HTML
-        with open(path, 'r', encoding='utf-8') as f:
-            html_string = f.read()
-        
-        # Clean up the temp file
-        os.unlink(path)
-        
-        return html_string
-        
-    except Exception as e:
-        logger.error(f"Error visualizing co-occurrence network: {str(e)}")
-        return f"<div class='alert alert-danger'>Error creating visualization: {str(e)}</div>"
 
 def get_network_stats(graph: nx.Graph) -> Dict[str, Any]:
     """
@@ -1382,11 +1233,13 @@ Respond ONLY with the JSON object, no other text. Make sure the JSON is valid.""
     try:
         logger.debug(f"Calling LLM for word analysis: {word} ({language}), client={type(client).__name__}")
 
-        # No schema is passed: the analysis fields are open-ended and heterogeneous
-        # (e.g. "idioms" may come back as a list or a mapping, and the display code
-        # handles both), so constraining it would narrow what the model can return.
-        # Each provider's generate_json still parses the reply tolerantly.
-        result = await client.generate_json(prompt, system_prompt=system_prompt)
+        # The schema is a hint: providers that support structured output (Claude) are
+        # constrained by it, the rest just get asked for JSON. Either way the reply is
+        # validated through the same model below, so every provider ends up producing
+        # the identical canonical shape.
+        result = await client.generate_json(
+            prompt, system_prompt=system_prompt, schema=WordAnalysis
+        )
 
         if "error" in result:
             logger.warning(f"LLM analysis error for {word}: {result['error']}")
@@ -1396,8 +1249,15 @@ Respond ONLY with the JSON object, no other text. Make sure the JSON is valid.""
             logger.warning(f"Empty analysis returned for {word}")
             return {"llm_error": "Empty response from LLM"}
 
-        logger.debug(f"Parsed word analysis for {word} ({len(result)} fields)")
-        return result
+        try:
+            analysis = WordAnalysis.model_validate(result)
+        except ValidationError as e:
+            logger.warning(f"Word analysis failed validation for {word}: {e}")
+            return {"llm_error": "LLM returned data in an unexpected shape"}
+
+        display_data = analysis.to_display_dict()
+        logger.debug(f"Parsed word analysis for {word} ({len(display_data)} fields)")
+        return display_data
 
     except Exception as e:
         logger.error(f"LLM analysis failed for {word}: {e}", exc_info=True)

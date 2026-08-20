@@ -2,6 +2,16 @@
 install:
 	uv sync
 
+test: install
+	uv run pytest -q
+
+lint: install
+	uv run flake8 idiomapp tests
+	uv run black --check idiomapp tests
+
+format: install
+	uv run black idiomapp tests
+
 run-graph: install
 	uv run python -m idiomapp.streamlit.app
 

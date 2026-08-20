@@ -8,8 +8,6 @@ import html
 # Third-party imports
 import streamlit as st 
 from pyvis.network import Network
-from pydantic import BaseModel
-from streamlit.logger import get_logger
 
 # Internal imports
 from idiomapp.utils.llm_utils import (
@@ -18,13 +16,13 @@ from idiomapp.utils.llm_utils import (
 )
 from idiomapp.utils.ollama_utils import get_available_models
 from idiomapp.utils.async_utils import run_async
+from idiomapp.utils.schemas import Translation
 from idiomapp.utils.state_utils import get_llm_client
 from idiomapp.utils.logging_utils import get_logger, get_recent_logs, clear_logs
 from idiomapp.utils.graph_storage import get_graph_storage
 from idiomapp.config import (
     settings, 
     LANGUAGE_MAP, 
-    TTS_LANGUAGE_NAMES, 
     POS_BORDER_COLORS, 
     GROUP_COLORS, 
     RELATION_COLORS
@@ -34,13 +32,9 @@ from idiomapp.utils.nlp_utils import (
     split_into_sentences,
     calculate_word_similarity,
     build_word_cooccurrence_network,
-    visualize_cooccurrence_network,
     detect_language,
     get_language_color,
     analyze_word_linguistics,
-    ensure_models_available,
-    get_model_status,
-    clear_model_cache,
 )
 from idiomapp.utils.audio_utils import (
     generate_audio,
@@ -496,11 +490,6 @@ def render_chat_message(message, role, target_lang=None, source_lang="en"):
             # For LLM responses, create container with message and TTS button
             formatted_content = process_message_content(message)
             
-            # Create a unique key for this message using content hash
-            # This ensures unique keys even if the app reruns
-            message_hash = hash(message)
-            message_key = f"tts_{message_hash}"
-            
             # Display message 
             if is_translation:
                 st.markdown(
@@ -644,7 +633,7 @@ def text_to_speech(text, lang_code=None, message_key=None):
         
         # If language code not provided, detect it
         if not lang_code:
-            logger.info(f"Language not specified, detecting language")
+            logger.info("Language not specified, detecting language")
             detected_lang = detect_language(text)
             logger.info(f"Detected language: {detected_lang}")
             lang_code = detected_lang
@@ -736,12 +725,6 @@ def display_translation_error(error_message: str, target_lang: str):
     flag = lang_info.get('flag', '🌐')
     
     st.error(f"{lang_name} {flag}: {error_message}")
-
-class Translation(BaseModel):
-    """Schema for a single translation response."""
-
-    translation: str
-
 
 async def translate_text(client, source_text, source_lang, target_lang):
     """
@@ -1117,7 +1100,7 @@ def add_cross_sentence_relationships(graph_data):
                                 
                                 # Extract similarity score and information
                                 if not isinstance(similarity_info, dict):
-                                    logger.warning(f"Invalid similarity_info format for cross-sentence comparison")
+                                    logger.warning("Invalid similarity_info format for cross-sentence comparison")
                                     continue
                                 
                                 similarity_score = similarity_info.get("score", 0)
@@ -1257,7 +1240,7 @@ def visualize_translation_graph(graph_data):
     Args:
         graph_data: Dictionary with nodes and edges
     """
-    logger.info(f"Visualizing translation graph")
+    logger.info("Visualizing translation graph")
     
     # Validate graph data
     if not graph_data or not isinstance(graph_data, dict):
@@ -1689,7 +1672,7 @@ def add_cross_language_relationships(graph_data, target_langs):
                                 
                                 # Get similarity score and relationship data
                                 if not isinstance(similarity_info, dict):
-                                    logger.warning(f"Invalid similarity_info format for cross-language comparison")
+                                    logger.warning("Invalid similarity_info format for cross-language comparison")
                                     continue
                                 
                                 similarity_score = similarity_info.get("score", 0)
@@ -2005,9 +1988,6 @@ def visualize_cooccurrence_network(graph, lang_code=None):
         """)
         
         # TODO: Dynamic - Language-specific colors - now using shared function from nlp_utils
-        lang_colors = {
-            None: "#4CC9F0"   # Default light blue if no language specified
-        }
         
         # Check if graph has nodes
         if len(graph.nodes()) == 0:
@@ -2268,31 +2248,31 @@ def handle_translation_error(error_message: str, source_lang: str, target_lang: 
         try:
             # Parse the error structure
             if "model_not_found" in error_message:
-                return f"⚠️ Model not available. Please select a different model from the sidebar."
+                return "⚠️ Model not available. Please select a different model from the sidebar."
             elif "invalid_api_key" in error_message:
-                return f"⚠️ Invalid API key. Please check your OpenAI API key in the sidebar."
+                return "⚠️ Invalid API key. Please check your OpenAI API key in the sidebar."
             elif "insufficient_quota" in error_message:
-                return f"⚠️ API quota exceeded. Please check your OpenAI billing and usage limits."
+                return "⚠️ API quota exceeded. Please check your OpenAI billing and usage limits."
             elif "quota_exceeded" in error_message:
-                return f"⚠️ API quota exceeded. Please check your OpenAI billing and usage limits."
+                return "⚠️ API quota exceeded. Please check your OpenAI billing and usage limits."
             elif "rate_limit" in error_message:
-                return f"⚠️ Rate limit exceeded. Please wait a moment and try again."
+                return "⚠️ Rate limit exceeded. Please wait a moment and try again."
             elif "429" in error_message:
-                return f"⚠️ Rate limit exceeded. Please wait a moment and try again."
+                return "⚠️ Rate limit exceeded. Please wait a moment and try again."
             elif "401" in error_message:
-                return f"⚠️ Authentication failed. Please check your OpenAI API key."
+                return "⚠️ Authentication failed. Please check your OpenAI API key."
             elif "403" in error_message:
-                return f"⚠️ Access denied. Please check your OpenAI account permissions."
+                return "⚠️ Access denied. Please check your OpenAI account permissions."
             elif "404" in error_message:
-                return f"⚠️ Model not available. Please select a different model from the sidebar."
+                return "⚠️ Model not available. Please select a different model from the sidebar."
             else:
-                return f"⚠️ API error occurred. Please try again or check your OpenAI account."
-        except:
-            return f"⚠️ Translation service error. Please try again."
+                return "⚠️ API error occurred. Please try again or check your OpenAI account."
+        except Exception:
+            return "⚠️ Translation service error. Please try again."
     
     # Handle other types of errors
     if "Error:" in error_message:
-        return f"⚠️ Translation service error. Please try again."
+        return "⚠️ Translation service error. Please try again."
     
     return f"⚠️ Unable to translate to {LANGUAGE_MAP.get(target_lang, {}).get('name', target_lang)}. Please try again."
 
@@ -2304,13 +2284,30 @@ def _badge(text: str, color: str) -> str:
             f'padding:2px 10px;border-radius:12px;font-size:13px;">{text}</span>')
 
 
+def _format_entry(item) -> str:
+    """Render one canonical {term, gloss} entry (or a plain value) for display."""
+    if isinstance(item, dict):
+        term = item.get("term", "")
+        gloss = item.get("gloss")
+        return f"{term}: {gloss}" if gloss else str(term)
+    return str(item)
+
+
 def _as_list(data: dict, key: str, *, limit: int = 8) -> list[str]:
-    """Normalize data[key] to a list of strings, truncated to *limit*."""
+    """
+    Normalize data[key] to a list of display strings, truncated to *limit*.
+
+    Analysis data reaches the UI already canonicalised by WordAnalysis, so the
+    heterogeneous fields arrive as lists of {term, gloss} entries. The isinstance
+    fallbacks below only cover values that never went through the schema.
+    """
     val = data.get(key)
     if not val:
         return []
+    if isinstance(val, dict):
+        return [f"{k}: {v}" for k, v in val.items()][:limit]
     items = val if isinstance(val, list) else [val]
-    return [str(x) for x in items[:limit]]
+    return [_format_entry(x) for x in items[:limit]]
 
 
 def display_word_analysis(word: str, language: str, analysis_data: dict):
@@ -2382,13 +2379,8 @@ def _render_origins_tab(d: dict, _pron: dict):
     if "historical_evolution" in d:
         st.caption(d["historical_evolution"])
     if "cognates" in d:
-        cognates = d["cognates"]
         st.markdown("**Cognates in other languages:**")
-        if isinstance(cognates, dict):
-            for lang, cog in cognates.items():
-                st.markdown(f"  - {lang}: **{cog}**")
-        else:
-            st.markdown("  " + " / ".join(f"**{c}**" for c in _as_list(d, "cognates")))
+        st.markdown("  " + " / ".join(f"**{c}**" for c in _as_list(d, "cognates")))
 
 
 def _render_meaning_tab(d: dict, _pron: dict):
@@ -2440,14 +2432,8 @@ def _render_usage_tab(d: dict, _pron: dict):
 
 def _render_idioms_tab(d: dict, _pron: dict):
     """Render the Idioms tab content."""
-    if "idioms" in d:
-        idioms = d["idioms"]
-        if isinstance(idioms, dict):
-            for expr, meaning in list(idioms.items())[:6]:
-                st.markdown(f"*{expr}* — {meaning}")
-        else:
-            for item in _as_list(d, "idioms", limit=6):
-                st.markdown(f"- *{item}*")
+    for item in _as_list(d, "idioms", limit=6):
+        st.markdown(f"- *{item}*")
     for p in _as_list(d, "proverbs", limit=3):
         st.markdown(f"- *{p}*")
     if "slang_usage" in d:
@@ -2458,15 +2444,9 @@ def _render_tips_tab(d: dict, _pron: dict):
     """Render the Tips tab content."""
     if "cultural_notes" in d:
         st.info(d["cultural_notes"])
-    if "false_friends" in d:
-        ff = d["false_friends"]
-        if isinstance(ff, list):
-            ff_str = ", ".join(ff)
-        elif isinstance(ff, dict):
-            ff_str = ", ".join(f"{k}: {v}" for k, v in ff.items())
-        else:
-            ff_str = str(ff)
-        st.warning(f"⚠️ False friends: {ff_str}")
+    false_friends = _as_list(d, "false_friends")
+    if false_friends:
+        st.warning("⚠️ False friends: " + ", ".join(false_friends))
     for m in _as_list(d, "common_mistakes"):
         st.error(f"  ✗ {m}", icon=None)
     for t in _as_list(d, "tips", limit=4):
@@ -2526,7 +2506,7 @@ def _normalize_items(val) -> list[str]:
     if isinstance(val, dict):
         return [f"{k}: {v}" for k, v in val.items()]
     if isinstance(val, list):
-        return [str(x) for x in val]
+        return [_format_entry(x) for x in val]
     return [str(val)]
 
 
@@ -2648,17 +2628,13 @@ def _display_word_knowledge_graph(word: str, language: str, analysis_data: dict)
     st.components.v1.html(html_content, height=500)
 
 def _show_dict_items(d: dict, key: str, heading: str):
-    """Render a dict field as a titled list of 'Key: Value' lines."""
-    val = d.get(key)
-    if not val:
+    """Render an entry field as a titled list of lines."""
+    items = _as_list(d, key)
+    if not items:
         return
     st.markdown(f"**{heading}:**")
-    if isinstance(val, dict):
-        for k, v in val.items():
-            st.markdown(f"- **{k.title()}:** {v}")
-    else:
-        for item in _as_list(d, key):
-            st.markdown(f"- {item}")
+    for item in items:
+        st.markdown(f"- {item}")
 
 
 def _show_examples(d: dict):
@@ -3052,7 +3028,7 @@ def main():
 
         # Graph Options - Move to collapsible expander
         with st.expander("📊 Graph Options", expanded=False):
-        # Switch for visualization type
+            # Switch for visualization type
             st.subheader("Visualization Settings")
         view_options = ["Semantic Graph", "Co-occurrence Network"]
         selected_view = st.radio("Analysis View", view_options)
