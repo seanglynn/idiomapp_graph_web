@@ -3,6 +3,7 @@ Natural Language Processing utilities.
 Uses textacy and spaCy for advanced NLP capabilities.
 """
 import re
+import asyncio
 import logging
 from typing import List, Dict, Any, Optional
 
@@ -18,7 +19,7 @@ from langdetect import detect, LangDetectException
 from pydantic import ValidationError
 
 from idiomapp.config import GROUP_COLORS as LANGUAGE_COLORS, LANG_MODELS
-from idiomapp.utils.schemas import WordAnalysis
+from idiomapp.utils.schemas import WordAnalysis, WORD_ANALYSIS_GROUPS, prompt_example
 
 # Setup logging
 logger = logging.getLogger(__name__)
@@ -1280,11 +1281,36 @@ def _improve_pos_detection(word: str, language: str) -> Optional[str]:
     return None
 
 
+def _word_analysis_prompt(lang_name: str, word: str, pos: str, example: str) -> str:
+    """Build the per-group word-analysis prompt around a schema-derived example."""
+    return f"""Analyze the {lang_name} word "{word}" (part of speech: {pos}).
+
+Return a JSON object with these fields (include all that apply):
+
+{example}
+
+Respond ONLY with the JSON object, no other text. Make sure the JSON is valid."""
+
+
 async def _get_llm_word_analysis(
     word: str, language: str, pos: str, client
 ) -> Dict[str, Any]:
     """
     Get enhanced linguistic analysis using LLM for language learning insights.
+
+    Fires one call per WordAnalysis group (meaning/usage/grammar/pronunciation/
+    learner_notes) concurrently, rather than one call for the whole object -
+    Claude's structured-output endpoint rejects the combined schema outright (its
+    compiled grammar is too large once every group sits under one call), while
+    each group's schema alone is comfortably within the limit. See the
+    ``WordAnalysis`` docstring in ``schemas.py`` for the full story. Each prompt's
+    illustrative JSON is generated from the group's own schema via
+    ``prompt_example()``, so the fields a provider is asked for can never drift
+    from the fields the response is actually validated against.
+
+    A group that errors does not fail the whole analysis - the other groups'
+    results are still merged and returned, matching this module's existing
+    tolerance for partial/sparse LLM output.
 
     Args:
         word: Word to analyze
@@ -1295,81 +1321,57 @@ async def _get_llm_word_analysis(
     Returns:
         Dictionary with enhanced analysis
     """
-    # Language names for prompts
     lang_names = {"en": "English", "es": "Spanish", "ca": "Catalan"}
     lang_name = lang_names.get(language, language)
 
-    # Create a focused prompt for word analysis - returning valid JSON
-    prompt = f"""Analyze the {lang_name} word "{word}" (part of speech: {pos}).
+    system_prompt = (
+        f"You are a {lang_name} linguistics expert. Respond only with valid JSON. "
+        f"No markdown, no explanation, just the JSON object."
+    )
 
-Return a JSON object with these fields (include all that apply):
+    logger.debug(
+        f"Calling LLM for word analysis: {word} ({language}), client={type(client).__name__}"
+    )
 
-{{
-  "definition": "clear definition of the word",
-  "etymology": "origin and history of the word",
-  "language_origin": "source language (Latin, Greek, etc.)",
-  "root": "root morpheme",
-  "cognates": ["related words in English", "French", "Italian", "Portuguese"],
-  "synonyms": ["synonym1", "synonym2", "synonym3"],
-  "antonyms": ["antonym1", "antonym2"],
-  "examples": ["Example sentence 1.", "Example sentence 2.", "Example sentence 3."],
-  "idioms": ["idiomatic expression using this word"],
-  "collocations": ["common word combination 1", "common word combination 2"],
-  "register": "formal/informal/colloquial",
-  "frequency": "common/uncommon/rare",
-  "regional_variations": "differences between regions",
-  "pronunciation": {{
-    "ipa": "IPA transcription",
-    "syllables": "syl-la-bles",
-    "stress": "stressed syllable"
-  }},
-  "grammar": {{
-    "infinitive": "base form (for verbs)",
-    "verb_type": "regular/irregular (for verbs)",
-    "gender": "masculine/feminine (for nouns)",
-    "plural": "plural form (for nouns)",
-    "conjugations": {{"present": "yo form", "past": "past form", "future": "future form"}}
-  }},
-  "tips": ["learning tip for this word"],
-  "common_mistakes": ["common error learners make"],
-  "false_friends": ["similar-looking word in another language that means something different"]
-}}
-
-Respond ONLY with the JSON object, no other text. Make sure the JSON is valid."""
-
-    system_prompt = f"You are a {lang_name} linguistics expert. Respond only with valid JSON. No markdown, no explanation, just the JSON object."
-
+    group_names = list(WORD_ANALYSIS_GROUPS)
     try:
-        logger.debug(
-            f"Calling LLM for word analysis: {word} ({language}), client={type(client).__name__}"
+        raw_results = await asyncio.gather(
+            *(
+                client.generate_json(
+                    _word_analysis_prompt(lang_name, word, pos, prompt_example(schema)),
+                    system_prompt=system_prompt,
+                    schema=schema,
+                )
+                for schema in WORD_ANALYSIS_GROUPS.values()
+            ),
+            return_exceptions=True,
         )
-
-        # The schema is a hint: providers that support structured output (Claude) are
-        # constrained by it, the rest just get asked for JSON. Either way the reply is
-        # validated through the same model below, so every provider ends up producing
-        # the identical canonical shape.
-        result = await client.generate_json(
-            prompt, system_prompt=system_prompt, schema=WordAnalysis
-        )
-
-        if "error" in result:
-            logger.warning(f"LLM analysis error for {word}: {result['error']}")
-            return {"llm_error": result["error"]}
-
-        if not result:
-            logger.warning(f"Empty analysis returned for {word}")
-            return {"llm_error": "Empty response from LLM"}
-
-        try:
-            analysis = WordAnalysis.model_validate(result)
-        except ValidationError as e:
-            logger.warning(f"Word analysis failed validation for {word}: {e}")
-            return {"llm_error": "LLM returned data in an unexpected shape"}
-
-        display_data = analysis.to_display_dict()
-        logger.debug(f"Parsed word analysis for {word} ({len(display_data)} fields)")
-        return display_data
-
     except Exception as e:
         logger.error(f"LLM analysis failed for {word}: {e}", exc_info=True)
         return {"llm_error": str(e)}
+
+    merged: Dict[str, Any] = {}
+    failures = []
+    for group_name, result in zip(group_names, raw_results):
+        if isinstance(result, BaseException):
+            failures.append(f"{group_name}: {result}")
+        elif "error" in result:
+            failures.append(f"{group_name}: {result['error']}")
+        else:
+            merged[group_name] = result
+
+    if not merged:
+        logger.warning(f"LLM analysis failed for every group for {word}: {failures}")
+        return {"llm_error": "; ".join(failures) or "Empty response from LLM"}
+    if failures:
+        logger.warning(f"Partial word analysis for {word}: {failures}")
+
+    try:
+        analysis = WordAnalysis.model_validate(merged)
+    except ValidationError as e:
+        logger.warning(f"Word analysis failed validation for {word}: {e}")
+        return {"llm_error": "LLM returned data in an unexpected shape"}
+
+    display_data = analysis.to_display_dict()
+    logger.debug(f"Parsed word analysis for {word} ({len(display_data)} fields)")
+    return display_data

@@ -16,11 +16,18 @@ UI then only ever sees one shape.
 
 ``extra="ignore"`` is deliberate: a model that volunteers a field we do not know about
 should not fail the whole analysis.
+
+Field ``description``\\ s are not decoration - they are the single source of truth
+for what each field means. They travel two ways from here: into the JSON schema
+Claude receives for structured output, and into ``prompt_example()`` below, which
+renders the same schema as illustrative JSON for providers that only take a prompt.
+Nothing about a field's meaning is hand-duplicated as separate prompt text.
 """
 
-from typing import Annotated, Any, Optional
+import json
+from typing import Annotated, Any, Optional, get_origin
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
 
 class Entry(BaseModel):
@@ -93,32 +100,248 @@ Entries = Annotated[list[Entry], BeforeValidator(_to_entries)]
 StrList = Annotated[list[str], BeforeValidator(_to_str_list)]
 
 
-class Pronunciation(BaseModel):
-    """Nested pronunciation block. Also mirrored at the top level of WordAnalysis."""
+def prompt_example(model_cls: type[BaseModel]) -> str:
+    """
+    Render a schema's fields as illustrative JSON for a prompt-based provider.
+
+    Ollama and OpenAI are not schema-constrained - they need an example in the
+    prompt text to know what shape and fields are expected. Rather than hand-write
+    that example (and have it silently drift from the real model the way the old
+    flat ``WordAnalysis`` prompt did), this reads it straight off the model: each
+    field's own ``description`` becomes its placeholder value, and list-typed
+    fields render as a one-item list so the expected shape is obvious.
+
+    Claude does not need this - it receives ``model_cls`` directly as
+    ``output_format`` and is constrained to match it exactly.
+    """
+    example: dict[str, Any] = {}
+    for name, info in model_cls.model_fields.items():
+        key = info.alias or name
+        hint = info.description or name
+        example[key] = [hint] if get_origin(info.annotation) is list else hint
+    return json.dumps(example, indent=2)
+
+
+class Meaning(BaseModel):
+    """Meaning, origin, and the word's place in the wider vocabulary."""
 
     model_config = ConfigDict(extra="ignore")
 
-    ipa: Optional[str] = None
-    syllables: Optional[str] = None
-    stress: Optional[str] = None
-    pronunciation_notes: Optional[str] = None
+    definition: Optional[str] = Field(
+        default=None, description="Clear, concise definition of the word"
+    )
+    etymology: Optional[str] = Field(
+        default=None, description="Origin and history of the word"
+    )
+    language_origin: Optional[str] = Field(
+        default=None,
+        description="Source language the word derives from (e.g. Latin, Greek, Arabic)",
+    )
+    root: Optional[str] = Field(
+        default=None, description="Root morpheme the word is built from"
+    )
+    historical_evolution: Optional[str] = Field(
+        default=None, description="How the word's form or meaning has changed over time"
+    )
+    hypernym: Optional[str] = Field(
+        default=None, description="A broader category term this word is a kind of"
+    )
+    cognates: Entries = Field(
+        default_factory=list,
+        description="Related words in other languages (English, French, Italian, Portuguese)",
+    )
+    synonyms: StrList = Field(
+        default_factory=list, description="Words with a similar meaning"
+    )
+    antonyms: StrList = Field(
+        default_factory=list, description="Words with the opposite meaning"
+    )
+    hyponyms: StrList = Field(
+        default_factory=list,
+        description="More specific words that fall under this word",
+    )
+    semantic_field: StrList = Field(
+        default_factory=list,
+        description="Other words in the same conceptual/topical area",
+    )
+    related_words: StrList = Field(
+        default_factory=list,
+        description="Words that share a root or are otherwise closely related",
+    )
+
+
+class Usage(BaseModel):
+    """How the word is actually used: examples, register, collocations."""
+
+    # populate_by_name lets `usage_register` be filled from the field name too;
+    # see the field's comment below for why it isn't just called `register`.
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    examples: StrList = Field(
+        default_factory=list, description="Example sentences using the word naturally"
+    )
+    collocations: StrList = Field(
+        default_factory=list,
+        description="Common word combinations this word appears in",
+    )
+    idioms: Entries = Field(
+        default_factory=list, description="Idiomatic expressions that use this word"
+    )
+    proverbs: StrList = Field(
+        default_factory=list, description="Proverbs or sayings that use this word"
+    )
+    # Named `usage_register` because a bare `register` shadows a BaseModel attribute
+    # and makes Pydantic warn. The alias keeps the wire/display key as "register".
+    usage_register: Optional[str] = Field(
+        default=None,
+        alias="register",
+        serialization_alias="register",
+        description="Register the word is used in: formal, informal, or colloquial",
+    )
+    frequency: Optional[str] = Field(
+        default=None, description="How common the word is: common, uncommon, or rare"
+    )
+    regional_variations: Optional[str] = Field(
+        default=None,
+        description="Differences in usage or meaning between regions/dialects",
+    )
+    slang_usage: Optional[str] = Field(
+        default=None, description="Slang or colloquial usage of the word, if any"
+    )
 
 
 class Grammar(BaseModel):
-    """Nested grammar block. Flattened onto the top level before display."""
+    """Grammatical properties: inflection, agreement, word-class specifics."""
 
     model_config = ConfigDict(extra="ignore")
 
-    infinitive: Optional[str] = None
-    verb_type: Optional[str] = None
-    gender: Optional[str] = None
-    plural: Optional[str] = None
-    conjugations: Entries = Field(default_factory=list)
+    infinitive: Optional[str] = Field(
+        default=None, description="Base/infinitive form, for verbs"
+    )
+    verb_type: Optional[str] = Field(
+        default=None, description="Whether the verb is regular or irregular"
+    )
+    gender: Optional[str] = Field(
+        default=None, description="Grammatical gender, for nouns: masculine or feminine"
+    )
+    plural: Optional[str] = Field(default=None, description="Plural form, for nouns")
+    position: Optional[str] = Field(
+        default=None,
+        description="Typical position in a sentence, e.g. for adjectives: before/after the noun",
+    )
+    grammar_notes: Optional[str] = Field(
+        default=None, description="Any other notable grammatical behavior"
+    )
+    conjugations: Entries = Field(
+        default_factory=list,
+        description="Key conjugated forms (present, past, future), for verbs",
+    )
+    articles: Entries = Field(
+        default_factory=list,
+        description="Definite/indefinite articles used with this word, for nouns",
+    )
+    gender_forms: Entries = Field(
+        default_factory=list,
+        description="Masculine/feminine forms of this word, if it varies by gender",
+    )
+    comparison: Entries = Field(
+        default_factory=list,
+        description="Comparative and superlative forms, for adjectives/adverbs",
+    )
+    related_forms: Entries = Field(
+        default_factory=list,
+        description="Other grammatically related word forms (e.g. adjective from a noun)",
+    )
+
+
+class Pronunciation(BaseModel):
+    """How the word sounds."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    ipa: Optional[str] = Field(
+        default=None, description="IPA (International Phonetic Alphabet) transcription"
+    )
+    syllables: Optional[str] = Field(
+        default=None, description="Syllable breakdown, e.g. syl-la-bles"
+    )
+    stress: Optional[str] = Field(
+        default=None, description="Which syllable carries the stress"
+    )
+    pronunciation_notes: Optional[str] = Field(
+        default=None, description="Any other notable pronunciation guidance"
+    )
+
+
+class LearnerNotes(BaseModel):
+    """Tips and pitfalls aimed at a language learner rather than a dictionary reader."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    tips: StrList = Field(
+        default_factory=list,
+        description="Practical tips for learners memorizing or using this word",
+    )
+    common_mistakes: StrList = Field(
+        default_factory=list, description="Common mistakes learners make with this word"
+    )
+    false_friends: Entries = Field(
+        default_factory=list,
+        description="Similar-looking words in another language with a different meaning",
+    )
+    cultural_notes: Optional[str] = Field(
+        default=None, description="Cultural context relevant to how this word is used"
+    )
+
+
+# The WordAnalysis groups, in the order they are presented. Shared by the model
+# below (for regrouping flat provider output) and by nlp_utils (for issuing one
+# call per group) - one registry, so the two can never drift apart.
+WORD_ANALYSIS_GROUPS: dict[str, type[BaseModel]] = {
+    "meaning": Meaning,
+    "usage": Usage,
+    "grammar": Grammar,
+    "pronunciation": Pronunciation,
+    "learner_notes": LearnerNotes,
+}
+
+
+def _build_field_to_group() -> dict[str, str]:
+    """Map every group field name (and JSON alias) to the group that owns it."""
+    mapping: dict[str, str] = {}
+    for group_name, model in WORD_ANALYSIS_GROUPS.items():
+        for field_name, info in model.model_fields.items():
+            mapping[field_name] = group_name
+            if info.alias:
+                mapping[info.alias] = group_name
+    return mapping
+
+
+_FIELD_TO_GROUP = _build_field_to_group()
 
 
 class WordAnalysis(BaseModel):
     """
-    The LLM half of a word analysis.
+    The LLM half of a word analysis, normalised into five cohesive groups.
+
+    This shape exists because of a real constraint, not just for tidiness:
+    Anthropic's structured-output endpoint rejects a schema once its *compiled
+    grammar* gets too large, and that is roughly proportional to total field count
+    and nesting, not just how many fields sit at the root. The previous shape was
+    41 fields flat at the top level - partly because ``grammar``/``pronunciation``
+    were represented twice, as both a nested block and duplicate flattened fields -
+    and a single ``messages.parse`` call using it was rejected outright (verified
+    live against the API). Nesting those 41 fields under five groups in one schema
+    still gets rejected for the same reason: the total complexity does not shrink
+    just by regrouping it.
+
+    What actually works (also verified live): each group's schema *alone* is well
+    within the limit. So ``nlp_utils._get_llm_word_analysis`` does not send this
+    whole model to Claude in one call - it fires one ``messages.parse`` call per
+    group in ``WORD_ANALYSIS_GROUPS``, concurrently, each schema-constrained on its
+    own small model, and merges the five results into this one. This model is what
+    that merge is validated through, and what every provider's output - Claude's
+    structured, Ollama/OpenAI's tolerant-parsed - ultimately normalises to.
 
     Deliberately does NOT include the spaCy-derived keys (``pos``, ``lemma``,
     ``is_alpha``, ``vector_norm``, ...). Those are set by
@@ -126,81 +349,55 @@ class WordAnalysis(BaseModel):
     fields here are merged on top of them.
     """
 
-    # populate_by_name lets `usage_register` be filled from the JSON key "register";
-    # see the field's comment below.
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    model_config = ConfigDict(extra="ignore")
 
-    # --- meaning and origin ---
-    definition: Optional[str] = None
-    etymology: Optional[str] = None
-    language_origin: Optional[str] = None
-    root: Optional[str] = None
-    historical_evolution: Optional[str] = None
-    hypernym: Optional[str] = None
+    meaning: Meaning = Field(default_factory=Meaning)
+    usage: Usage = Field(default_factory=Usage)
+    grammar: Grammar = Field(default_factory=Grammar)
+    pronunciation: Pronunciation = Field(default_factory=Pronunciation)
+    learner_notes: LearnerNotes = Field(default_factory=LearnerNotes)
 
-    cognates: Entries = Field(default_factory=list)
-    synonyms: StrList = Field(default_factory=list)
-    antonyms: StrList = Field(default_factory=list)
-    hyponyms: StrList = Field(default_factory=list)
-    semantic_field: StrList = Field(default_factory=list)
-    related_words: StrList = Field(default_factory=list)
+    @model_validator(mode="before")
+    @classmethod
+    def _regroup_flat_fields(cls, data: Any) -> Any:
+        """
+        Fold a provider's flat field names into their group before validation.
 
-    # --- usage ---
-    examples: StrList = Field(default_factory=list)
-    collocations: StrList = Field(default_factory=list)
-    idioms: Entries = Field(default_factory=list)
-    proverbs: StrList = Field(default_factory=list)
-    # Named `usage_register` because a bare `register` shadows a BaseModel attribute
-    # and makes Pydantic warn. The alias keeps the wire/display key as "register".
-    usage_register: Optional[str] = Field(
-        default=None, alias="register", serialization_alias="register"
-    )
-    frequency: Optional[str] = None
-    regional_variations: Optional[str] = None
-    slang_usage: Optional[str] = None
+        Claude is schema-constrained per group and always returns each group's
+        shape correctly, but Ollama and OpenAI are only prompted for it - a model
+        that ignores the nesting and answers with ``{"definition": ..., "ipa":
+        ...}`` at the top level would otherwise have every one of those fields
+        silently dropped by ``extra="ignore"``. This is also what makes a plain
+        display dict (already flat) round-trip through ``model_validate`` unchanged.
+        """
+        if not isinstance(data, dict):
+            return data
 
-    # --- grammar (nested, plus the flattened equivalents the UI reads) ---
-    grammar: Optional[Grammar] = None
-    infinitive: Optional[str] = None
-    verb_type: Optional[str] = None
-    gender: Optional[str] = None
-    plural: Optional[str] = None
-    position: Optional[str] = None
-    grammar_notes: Optional[str] = None
-    conjugations: Entries = Field(default_factory=list)
-    articles: Entries = Field(default_factory=list)
-    gender_forms: Entries = Field(default_factory=list)
-    comparison: Entries = Field(default_factory=list)
-    related_forms: Entries = Field(default_factory=list)
+        data = dict(data)
+        for key in list(data.keys()):
+            if key in WORD_ANALYSIS_GROUPS:
+                continue
+            group_name = _FIELD_TO_GROUP.get(key)
+            if group_name is None:
+                continue
+            bucket = data.setdefault(group_name, {})
+            if isinstance(bucket, dict) and key not in bucket:
+                bucket[key] = data.pop(key)
 
-    # --- pronunciation (nested, plus the flattened equivalents) ---
-    pronunciation: Optional[Pronunciation] = None
-    ipa: Optional[str] = None
-    syllables: Optional[str] = None
-    stress: Optional[str] = None
-    pronunciation_notes: Optional[str] = None
-
-    # --- learner notes ---
-    tips: StrList = Field(default_factory=list)
-    common_mistakes: StrList = Field(default_factory=list)
-    false_friends: Entries = Field(default_factory=list)
-    cultural_notes: Optional[str] = None
+        return data
 
     def to_display_dict(self) -> dict:
         """
         Flatten into the dict the Streamlit display layer consumes.
 
         Empty values are dropped so the existing "is this key present?" tab gating
-        keeps working, and the nested grammar/pronunciation blocks are merged onto
-        the top level (top-level values win, matching the previous behaviour).
+        keeps working. The five groups have disjoint field names by construction,
+        so this is a plain union - no precedence rule is needed between them.
         """
-        data = self.model_dump(exclude_none=True, by_alias=True)
-
-        for block in ("grammar", "pronunciation"):
-            nested = data.pop(block, None) or {}
-            for key, value in nested.items():
-                if key not in data or not data[key]:
-                    data[key] = value
+        data: dict = {}
+        for group_name in WORD_ANALYSIS_GROUPS:
+            group = getattr(self, group_name)
+            data.update(group.model_dump(exclude_none=True, by_alias=True))
 
         return {k: v for k, v in data.items() if v not in (None, [], {}, "")}
 
@@ -210,4 +407,4 @@ class Translation(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    translation: str
+    translation: str = Field(description="The translated text")

@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from idiomapp.config import anthropic_supports_effort
+from idiomapp.config import anthropic_supports_effort, settings
 from idiomapp.utils.llm_utils import (
     AnthropicClient,
     LLMClient,
@@ -65,7 +65,14 @@ def test_status_dict_shape(provider):
 
 
 @pytest.mark.parametrize("provider", ["openai", "anthropic"])
-def test_status_reports_unavailable_without_a_key(provider):
+def test_status_reports_unavailable_without_a_key(provider, monkeypatch):
+    """
+    An explicit empty api_key must mean "no key", even if a real one happens to be
+    configured in the environment - `LLMClient.create` falls back to `settings.*`
+    only when the caller does not supply a key at all.
+    """
+    monkeypatch.setattr(settings, "openai_api_key", "")
+    monkeypatch.setattr(settings, "anthropic_api_key", "")
     status = LLMClient.create(provider=provider, api_key="").get_model_status()
     assert status["available"] is False
 
@@ -159,7 +166,8 @@ async def test_claude_refusal_becomes_an_error_string_not_an_exception():
 
 
 @pytest.mark.asyncio
-async def test_claude_missing_key_returns_error_string():
+async def test_claude_missing_key_returns_error_string(monkeypatch):
+    monkeypatch.setattr(settings, "anthropic_api_key", "")
     result = await AnthropicClient("claude-opus-5", api_key="").generate_text("hi")
     assert result.startswith("Error:")
 
@@ -356,31 +364,49 @@ async def test_claude_falls_back_when_schema_is_rejected():
 
 @pytest.mark.asyncio
 async def test_claude_schema_path_returns_canonical_dict():
-    from idiomapp.utils.schemas import WordAnalysis
+    """
+    Uses `Usage`, not `WordAnalysis`, because that is what real word-analysis calls
+    actually send now - see the `WordAnalysis` docstring in schemas.py for why the
+    combined model is never itself passed as a structured-output schema.
+    """
+    from idiomapp.utils.schemas import Usage
 
     client = AnthropicClient("claude-opus-5", api_key="k")
     parsed = MagicMock()
     parsed.stop_reason = "end_turn"
-    parsed.parsed_output = WordAnalysis.model_validate(
-        {"idioms": {"dar la lata": "to annoy"}}
-    )
+    parsed.parsed_output = Usage.model_validate({"idioms": {"dar la lata": "to annoy"}})
 
     sdk = MagicMock()
     sdk.messages.parse = AsyncMock(return_value=parsed)
     client._sdk_client, client._sdk_loop_key = sdk, "fixed"
 
     with patch("idiomapp.utils.llm_utils.loop_key", return_value="fixed"):
-        result = await client.generate_json("analyse", schema=WordAnalysis)
+        result = await client.generate_json("analyse", schema=Usage)
 
     assert result["idioms"] == [{"term": "dar la lata", "gloss": "to annoy"}]
-    assert sdk.messages.parse.await_args.kwargs["output_format"] is WordAnalysis
+    assert sdk.messages.parse.await_args.kwargs["output_format"] is Usage
 
 
 @pytest.mark.asyncio
 async def test_providers_agree_on_shape():
-    """The same awkward payload through Ollama and Claude produces the same analysis."""
+    """
+    The same awkward payload through Ollama and Claude produces the same analysis.
+
+    `_get_llm_word_analysis` fires one call per WordAnalysis group concurrently.
+    Ollama is not schema-aware, so it is mocked to answer with the same flat
+    payload every time regardless of which group's prompt it received - the
+    `_regroup_flat_fields` validator is what sorts that out. Claude *is*
+    schema-constrained per call, so its mock must answer according to whichever
+    group schema each call actually asked for.
+    """
     from idiomapp.utils.nlp_utils import _get_llm_word_analysis
-    from idiomapp.utils.schemas import WordAnalysis
+    from idiomapp.utils.schemas import (
+        Grammar,
+        LearnerNotes,
+        Meaning,
+        Pronunciation,
+        Usage,
+    )
 
     payload = (
         '{"definition":"a cat","idioms":{"dar la lata":"to annoy"},"synonyms":"felino"}'
@@ -392,18 +418,25 @@ async def test_providers_agree_on_shape():
     ollama_sdk.chat = AsyncMock(return_value={"message": {"content": payload}})
     ollama_client._sdk_client, ollama_client._sdk_loop_key = ollama_sdk, "fixed"
 
+    # What each group schema should plausibly be asked to return for this payload.
+    group_payloads = {
+        Meaning: {"definition": "a cat", "synonyms": "felino"},
+        Usage: {"idioms": {"dar la lata": "to annoy"}},
+        Grammar: {},
+        Pronunciation: {},
+        LearnerNotes: {},
+    }
+
+    async def fake_parse(**kwargs):
+        schema = kwargs["output_format"]
+        response = MagicMock()
+        response.stop_reason = "end_turn"
+        response.parsed_output = schema.model_validate(group_payloads[schema])
+        return response
+
     claude_client = AnthropicClient("claude-opus-5", api_key="k")
-    parsed = MagicMock()
-    parsed.stop_reason = "end_turn"
-    parsed.parsed_output = WordAnalysis.model_validate(
-        {
-            "definition": "a cat",
-            "idioms": {"dar la lata": "to annoy"},
-            "synonyms": "felino",
-        }
-    )
     claude_sdk = MagicMock()
-    claude_sdk.messages.parse = AsyncMock(return_value=parsed)
+    claude_sdk.messages.parse = AsyncMock(side_effect=fake_parse)
     claude_client._sdk_client, claude_client._sdk_loop_key = claude_sdk, "fixed"
 
     with patch("idiomapp.utils.llm_utils.loop_key", return_value="fixed"), patch.object(
