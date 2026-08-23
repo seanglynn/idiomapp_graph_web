@@ -16,7 +16,6 @@ Two details worth knowing before editing:
   gate in `idiomapp.config`.
 """
 
-import json
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional, Type
 
@@ -24,7 +23,7 @@ from typing import Any, Dict, Optional, Type
 import ollama
 
 # For OpenAI
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, BadRequestError
 from openai.types.chat import ChatCompletion
 
 # For Anthropic (Claude)
@@ -260,10 +259,15 @@ class OllamaClient(LLMClient):
 
     async def generate_json(self, prompt, system_prompt=None, schema=None):
         """
-        Generate JSON using Ollama's native JSON mode.
+        Generate JSON using Ollama's native grammar-constrained JSON mode (`format="json"`).
 
-        Ollama has no schema-constrained output, so `schema` is used only as a hint
-        appended to the prompt; the response is parsed tolerantly.
+        `schema` is accepted for interface parity with the other clients but
+        unused here - Ollama's JSON mode has no notion of a schema; the
+        illustrative example built from a schema is composed by the caller (see
+        `schemas.prompt_example`, folded into `prompt` before this method ever
+        sees it), not by this method. `format="json"` guarantees syntactically
+        valid JSON but not a particular shape, so a fenced response is still
+        possible from some models; `extract_json` covers that one remaining case.
         """
         if not self._check_model_availability():
             return {"error": "Model not available. Please check if Ollama is running."}
@@ -378,6 +382,46 @@ class OpenAIClient(LLMClient):
 
         return request_params
 
+    async def _create_chat_completion(
+        self, request_params: Dict[str, Any]
+    ) -> ChatCompletion:
+        """
+        Call the Chat Completions endpoint, retrying once if this model's
+        parameter support was only guessed.
+
+        `_build_request_params` chooses `max_tokens` vs. `max_completion_tokens`
+        from `get_model_capabilities`. For a model missing from (or misclassified
+        by) that table, the guess can be wrong, and OpenAI rejects it with a 400
+        naming the parameter. That is retried once with the other parameter - but
+        only when `capabilities_confirmed` is False, i.e. we already know this was
+        a guess, not by re-deriving that uncertainty from the exception's text. A
+        confirmed model's 400 is a real error and is not retried.
+        """
+        try:
+            return await self._client().chat.completions.create(**request_params)
+        except BadRequestError as original_error:
+            capabilities = get_model_capabilities(self.model_name)
+            if (
+                capabilities.get("capabilities_confirmed", True)
+                or "max_tokens" not in request_params
+            ):
+                raise
+
+            logger.info(
+                f"{self.model_name}'s parameter support is unconfirmed and the "
+                "request was rejected; retrying with max_completion_tokens instead "
+                "of max_tokens"
+            )
+            fallback_params = dict(request_params)
+            fallback_params["max_completion_tokens"] = fallback_params.pop("max_tokens")
+            try:
+                return await self._client().chat.completions.create(**fallback_params)
+            except Exception as fallback_error:
+                logger.error(
+                    f"Fallback with max_completion_tokens also failed: {fallback_error}"
+                )
+                raise original_error
+
     async def generate_text(self, prompt, system_prompt=None):
         """
         Generate text from the OpenAI model.
@@ -398,8 +442,8 @@ class OpenAIClient(LLMClient):
         try:
             logger.debug(f"Generating text with OpenAI model {self.model_name}")
 
-            response: ChatCompletion = await self._client().chat.completions.create(
-                **request_params
+            response: ChatCompletion = await self._create_chat_completion(
+                request_params
             )
 
             generated_text = response.choices[0].message.content or ""
@@ -415,40 +459,21 @@ class OpenAIClient(LLMClient):
             return generated_text
 
         except Exception as e:
-            error_msg = str(e)
-            logger.error(f"Error generating text with OpenAI: {error_msg}")
-
-            # Some models only accept max_completion_tokens; retry once if that is why we failed.
-            if "max_tokens" in error_msg and "max_completion_tokens" in error_msg:
-                logger.info(
-                    f"Attempting fallback with max_completion_tokens for model {self.model_name}"
-                )
-                try:
-                    fallback_params = dict(request_params)
-                    fallback_params.pop("max_tokens", None)
-                    fallback_params[
-                        "max_completion_tokens"
-                    ] = settings.openai_max_tokens
-
-                    response = await self._client().chat.completions.create(
-                        **fallback_params
-                    )
-                    generated_text = response.choices[0].message.content or ""
-
-                    logger.info("Fallback successful with max_completion_tokens")
-                    return generated_text
-
-                except Exception as fallback_error:
-                    logger.error(f"Fallback attempt also failed: {str(fallback_error)}")
-
+            logger.error(f"Error generating text with OpenAI: {str(e)}")
             raise e
 
     async def generate_json(self, prompt, system_prompt=None, schema=None):
         """
         Generate a JSON response from the OpenAI model using JSON mode.
 
-        `schema` is accepted for interface compatibility; OpenAI JSON mode does not
-        constrain to it, so the response is parsed tolerantly.
+        `schema` is accepted for interface parity with the other clients; OpenAI's
+        JSON mode (`response_format={"type": "json_object"}`) guarantees
+        syntactically valid JSON but not a particular shape, so no schema is sent.
+        Parsing goes through the same `extract_json` the other providers use
+        rather than a second, separately-maintained `json.loads` path - in
+        practice this provider's response always parses on the first of
+        `extract_json`'s two attempts, so this is one fewer parsing code path in
+        this file, not a behavior change.
         """
         if not self.api_key:
             logger.error("OpenAI API key not set")
@@ -460,18 +485,18 @@ class OpenAIClient(LLMClient):
             request_params = self._build_request_params(prompt, system_prompt)
             request_params["response_format"] = {"type": "json_object"}
 
-            response: ChatCompletion = await self._client().chat.completions.create(
-                **request_params
+            response: ChatCompletion = await self._create_chat_completion(
+                request_params
             )
 
             generated_text = response.choices[0].message.content or "{}"
             logger.debug(f"Generated JSON length: {len(generated_text)}")
 
-            return json.loads(generated_text)
+            parsed = extract_json(generated_text)
+            if parsed is None:
+                return {"error": "Could not parse JSON from OpenAI response"}
+            return parsed
 
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse JSON response: {e}")
-            return {"error": f"JSON parse error: {str(e)}"}
         except Exception as e:
             logger.error(f"Error generating JSON with OpenAI: {str(e)}")
             return {"error": str(e)}

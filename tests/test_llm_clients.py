@@ -11,6 +11,7 @@ Every provider SDK is mocked; nothing here makes a network call.
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from openai import BadRequestError
 
 from idiomapp.config import anthropic_supports_effort, settings
 from idiomapp.utils.llm_utils import (
@@ -229,6 +230,97 @@ async def test_openai_generate_json_returns_a_dict():
 
 
 @pytest.mark.asyncio
+async def test_openai_generate_text_retries_when_capabilities_are_unconfirmed():
+    """An unlisted model's first 400 is retried once with the other token param."""
+    import httpx
+
+    client = OpenAIClient("some-mystery-model-9000", api_key="k")
+    completion = MagicMock()
+    completion.choices = [MagicMock(message=MagicMock(content="hola"))]
+
+    sdk = MagicMock()
+    sdk.chat.completions.create = AsyncMock(
+        side_effect=[
+            BadRequestError(
+                message="Unsupported parameter: 'max_tokens'",
+                response=httpx.Response(
+                    400, request=httpx.Request("POST", "https://x")
+                ),
+                body=None,
+            ),
+            completion,
+        ]
+    )
+    client._sdk_client, client._sdk_loop_key = sdk, "fixed"
+
+    with patch("idiomapp.utils.llm_utils.loop_key", return_value="fixed"):
+        result = await client.generate_text("hi")
+
+    assert result == "hola"
+    assert sdk.chat.completions.create.await_count == 2
+    second_call_kwargs = sdk.chat.completions.create.await_args_list[1].kwargs
+    assert "max_completion_tokens" in second_call_kwargs
+    assert "max_tokens" not in second_call_kwargs
+
+
+@pytest.mark.asyncio
+async def test_openai_generate_text_does_not_retry_when_capabilities_are_confirmed():
+    """A known model's 400 is a real error, not a guess to second-guess."""
+    import httpx
+
+    client = OpenAIClient("gpt-4o", api_key="k")
+    sdk = MagicMock()
+    sdk.chat.completions.create = AsyncMock(
+        side_effect=BadRequestError(
+            message="some unrelated error",
+            response=httpx.Response(400, request=httpx.Request("POST", "https://x")),
+            body=None,
+        )
+    )
+    client._sdk_client, client._sdk_loop_key = sdk, "fixed"
+
+    with patch("idiomapp.utils.llm_utils.loop_key", return_value="fixed"):
+        with pytest.raises(BadRequestError):
+            await client.generate_text("hi")
+
+    assert sdk.chat.completions.create.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_openai_generate_json_also_gets_the_retry_safety_net():
+    """generate_json shares _create_chat_completion, so it is no longer asymmetric
+    with generate_text - previously it had no retry safety net at all."""
+    import httpx
+
+    client = OpenAIClient("some-mystery-model-9000", api_key="k")
+    completion = MagicMock()
+    completion.choices = [
+        MagicMock(message=MagicMock(content='{"translation": "hola"}'))
+    ]
+
+    sdk = MagicMock()
+    sdk.chat.completions.create = AsyncMock(
+        side_effect=[
+            BadRequestError(
+                message="Unsupported parameter: 'max_tokens'",
+                response=httpx.Response(
+                    400, request=httpx.Request("POST", "https://x")
+                ),
+                body=None,
+            ),
+            completion,
+        ]
+    )
+    client._sdk_client, client._sdk_loop_key = sdk, "fixed"
+
+    with patch("idiomapp.utils.llm_utils.loop_key", return_value="fixed"):
+        result = await client.generate_json("hi")
+
+    assert result == {"translation": "hola"}
+    assert sdk.chat.completions.create.await_count == 2
+
+
+@pytest.mark.asyncio
 async def test_ollama_generate_json_uses_json_format():
     with patch(
         "idiomapp.utils.llm_utils.get_available_models",
@@ -392,12 +484,15 @@ async def test_providers_agree_on_shape():
     """
     The same awkward payload through Ollama and Claude produces the same analysis.
 
-    `_get_llm_word_analysis` fires one call per WordAnalysis group concurrently.
-    Ollama is not schema-aware, so it is mocked to answer with the same flat
-    payload every time regardless of which group's prompt it received - the
-    `_regroup_flat_fields` validator is what sorts that out. Claude *is*
-    schema-constrained per call, so its mock must answer according to whichever
-    group schema each call actually asked for.
+    `_get_llm_word_analysis` fires one call per WordAnalysis group concurrently and
+    nests each group's raw response under its own group key before validation
+    (`merged[group_name] = result`). Ollama is not schema-aware, so it is mocked to
+    answer with the same flat payload every time regardless of which group's
+    prompt it received - each group's submodel (`extra="ignore"`) simply keeps the
+    fields it declares and drops the rest via ordinary field-name matching, no
+    validator does cross-group routing. Claude *is* schema-constrained per call,
+    so its mock must answer according to whichever group schema each call
+    actually asked for.
     """
     from idiomapp.utils.nlp_utils import _get_llm_word_analysis
     from idiomapp.utils.schemas import (

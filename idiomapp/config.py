@@ -302,12 +302,17 @@ def get_model_capabilities(model_name: str) -> Dict[str, Any]:
         model_name: The name of the model to get capabilities for
 
     Returns:
-        dict: Model capabilities including parameter support
+        dict: Model capabilities including parameter support, plus
+        `capabilities_confirmed`: True when the model matched a known entry or
+        pattern, False when nothing matched and the legacy defaults were guessed.
+        Callers that need to know whether a rejected request's parameters can be
+        trusted (see `OpenAIClient._create_chat_completion`) key off this instead
+        of inspecting the error text.
     """
     # Try to find exact match first
     for model_pattern, capabilities in MODEL_CAPABILITIES.items():
         if model_pattern in model_name:
-            return capabilities
+            return {**capabilities, "capabilities_confirmed": True}
 
     # Fallback: infer capabilities from model name patterns
     if any(prefix in model_name for prefix in ["gpt-5"]):
@@ -317,6 +322,7 @@ def get_model_capabilities(model_name: str) -> Dict[str, Any]:
             "supports_custom_max_tokens": True,
             "description": "Inferred GPT-5 capabilities",
             "notes": "Inferred from model name pattern",
+            "capabilities_confirmed": True,
         }
     elif any(prefix in model_name for prefix in ["gpt-4o", "claude-3"]):
         return {
@@ -325,6 +331,7 @@ def get_model_capabilities(model_name: str) -> Dict[str, Any]:
             "supports_custom_max_tokens": True,
             "description": "Inferred modern model capabilities",
             "notes": "Inferred from model name pattern",
+            "capabilities_confirmed": True,
         }
     else:
         # Default to legacy model capabilities
@@ -334,6 +341,7 @@ def get_model_capabilities(model_name: str) -> Dict[str, Any]:
             "supports_custom_max_tokens": True,
             "description": "Default legacy model capabilities",
             "notes": "Default fallback for unknown models",
+            "capabilities_confirmed": False,
         }
 
 

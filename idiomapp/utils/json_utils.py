@@ -19,11 +19,19 @@ logger = get_logger("json_utils")
 
 def extract_json(response: str) -> Optional[Dict[str, Any]]:
     """
-    Pull a JSON object out of a raw LLM response.
+    Parse a JSON object out of a raw LLM response.
 
-    Tries, in order: a ```json fenced block, the first balanced {...} object, and
-    finally that same object with the two mistakes models actually make (trailing
-    commas, single-quoted strings) repaired.
+    Tries the whole response first - what every well-behaved provider actually
+    returns (OpenAI's JSON mode, Claude's unconstrained fallback, Ollama's
+    grammar-constrained ``format="json"``). Falls back to the contents of a
+    ```json ... ``` or bare ``` ... ``` fenced block - the one failure mode this
+    app has actually needed a fallback for (a local Ollama model wrapping its
+    answer in a fence despite ``format="json"``).
+
+    An earlier version also scanned surrounding prose for the first balanced
+    ``{...}`` and rewrote quotes/trailing commas before retrying. Both are
+    dropped: neither had any test coverage, and the quote rewrite corrupted
+    ordinary contractions in translated text (``"don't"`` -> ``"don"t"``).
 
     Args:
         response: Raw text returned by the model.
@@ -34,46 +42,25 @@ def extract_json(response: str) -> Optional[Dict[str, Any]]:
     if not response:
         return None
 
-    # 1. Fenced code block.
-    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", response, re.DOTALL)
+    parsed = _parse_object(response)
+    if parsed is not None:
+        return parsed
+
+    fenced = re.search(r"```(?:json)?\s*(.*?)\s*```", response, re.DOTALL)
     if fenced:
-        try:
-            return json.loads(fenced.group(1))
-        except json.JSONDecodeError:
-            logger.debug("Fenced block was not valid JSON, falling through")
+        parsed = _parse_object(fenced.group(1))
+        if parsed is not None:
+            return parsed
+        logger.debug("Fenced block was not valid JSON either")
 
-    # 2. First balanced object in the text.
-    json_str = _first_balanced_object(response)
-    if json_str is None:
-        logger.warning("No JSON object found in LLM response")
-        return None
-
-    try:
-        return json.loads(json_str)
-    except json.JSONDecodeError:
-        pass
-
-    # 3. Repair the common malformations and retry once.
-    repaired = re.sub(r",\s*([}\]])", r"\1", json_str)  # trailing commas
-    repaired = repaired.replace("'", '"')  # single-quoted strings
-    try:
-        return json.loads(repaired)
-    except json.JSONDecodeError as e:
-        logger.warning(f"Could not parse JSON from LLM response: {e}")
-        return None
-
-
-def _first_balanced_object(text: str) -> Optional[str]:
-    """Return the first brace-balanced {...} substring, or None."""
-    depth = 0
-    start = -1
-    for i, char in enumerate(text):
-        if char == "{":
-            if depth == 0:
-                start = i
-            depth += 1
-        elif char == "}":
-            depth -= 1
-            if depth == 0 and start != -1:
-                return text[start : i + 1]
+    logger.warning("Could not parse a JSON object from the LLM response")
     return None
+
+
+def _parse_object(text: str) -> Optional[Dict[str, Any]]:
+    """Parse *text* as JSON, returning it only if the result is an object."""
+    try:
+        result = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return result if isinstance(result, dict) else None

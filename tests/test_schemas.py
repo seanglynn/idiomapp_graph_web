@@ -34,6 +34,19 @@ def _get_field(model: WordAnalysis, field: str):
     raise AssertionError(f"{field!r} is not declared on any WordAnalysis group")
 
 
+def _owning_group(field: str) -> str:
+    """Which of the five WordAnalysis groups declares *field*."""
+    for group_name, group_model in WORD_ANALYSIS_GROUPS.items():
+        if field in group_model.model_fields:
+            return group_name
+    raise AssertionError(f"{field!r} is not declared on any WordAnalysis group")
+
+
+def _nested(field: str, raw):
+    """Build the group-nested input `model_validate` actually expects for *field*."""
+    return {_owning_group(field): {field: raw}}
+
+
 # Every shape a provider has been seen to emit for a "list or mapping" field.
 SHAPES = {
     "mapping": ({"dar la lata": "to annoy"}, [("dar la lata", "to annoy")]),
@@ -68,7 +81,7 @@ ENTRY_FIELDS = [
 def test_entry_fields_normalise_every_shape(field, shape):
     """Whatever a provider sends, the field ends up as a list of Entry."""
     raw, expected = SHAPES[shape]
-    model = WordAnalysis.model_validate({field: raw})
+    model = WordAnalysis.model_validate(_nested(field, raw))
     got = [(e.term, e.gloss) for e in _get_field(model, field)]
     assert got == expected
 
@@ -88,7 +101,8 @@ def test_missing_entry_field_is_empty_list():
     ],
 )
 def test_str_list_fields_normalise(raw, expected):
-    assert WordAnalysis.model_validate({"synonyms": raw}).meaning.synonyms == expected
+    model = WordAnalysis.model_validate({"meaning": {"synonyms": raw}})
+    assert model.meaning.synonyms == expected
 
 
 def test_sparse_response_validates():
@@ -99,35 +113,23 @@ def test_sparse_response_validates():
 
 
 def test_unmodelled_field_is_ignored_not_an_error():
-    model = WordAnalysis.model_validate({"definition": "x", "invented_field": "y"})
+    """
+    A provider volunteering a field we do not model must not fail the analysis -
+    Meaning's own extra="ignore" is what protects this, once the field is inside
+    the right group.
+    """
+    model = WordAnalysis.model_validate(
+        {"meaning": {"definition": "x", "invented_field": "y"}}
+    )
     assert model.meaning.definition == "x"
     assert "invented_field" not in model.to_display_dict()
 
 
 def test_register_alias_round_trips():
     """`register` shadows a BaseModel attribute, so it is stored as usage_register."""
-    model = WordAnalysis.model_validate({"register": "informal"})
+    model = WordAnalysis.model_validate({"usage": {"register": "informal"}})
     assert model.usage.usage_register == "informal"
     assert model.to_display_dict()["register"] == "informal"
-
-
-def test_flat_fields_regroup_by_owning_group():
-    """
-    A flat-answering provider's fields land in the right group, not just at any
-    group (extra="ignore" would otherwise silently drop them).
-    """
-    model = WordAnalysis.model_validate(
-        {
-            "definition": "a small carnivore",  # -> meaning
-            "gender": "masculine",  # -> grammar
-            "ipa": "ˈɡa.to",  # -> pronunciation
-            "tips": ["remember the gender"],  # -> learner_notes
-        }
-    )
-    assert model.meaning.definition == "a small carnivore"
-    assert model.grammar.gender == "masculine"
-    assert model.pronunciation.ipa == "ˈɡa.to"
-    assert model.learner_notes.tips == ["remember the gender"]
 
 
 def test_already_grouped_input_is_left_alone():
@@ -162,19 +164,58 @@ def test_display_dict_flattens_all_five_groups():
 def test_display_dict_drops_empties():
     """Tab gating keys off presence, so empty values must not appear."""
     display = WordAnalysis.model_validate(
-        {"definition": "x", "synonyms": []}
+        {"meaning": {"definition": "x", "synonyms": []}}
     ).to_display_dict()
     assert "synonyms" not in display
     assert display["definition"] == "x"
 
 
-def test_display_dict_is_idempotent():
-    """Re-validating a display dict yields the same thing - Claude's output goes round twice."""
+def test_flat_display_dict_no_longer_round_trips_through_model_validate():
+    """
+    `to_display_dict()`'s output is flat; re-validating it used to round-trip via
+    a `model_validator` that folded flat keys back into their group. That
+    validator was dead code - no production call site ever passed flat input to
+    `model_validate` (`_get_llm_word_analysis`'s merge always nests each group's
+    response under its own group key first) - and has been removed. This pins the
+    resulting, narrower contract explicitly rather than silently losing coverage:
+    a flat dict at the root is accepted (`extra="ignore"`) but populates nothing.
+    """
     first = WordAnalysis.model_validate(
-        {"idioms": {"a": "b"}, "register": "informal", "synonyms": ["s"]}
+        {"usage": {"idioms": {"a": "b"}, "register": "informal"}}
     ).to_display_dict()
     second = WordAnalysis.model_validate(first).to_display_dict()
-    assert first == second
+    assert first  # the original had real content
+    assert second == {}  # flat input is now a no-op
+
+
+def test_nested_mapping_gloss_flattens_readably_not_as_python_repr():
+    """Pins the _stringify fix: a doubly-nested value must render as text, not repr."""
+    model = WordAnalysis.model_validate(
+        {
+            "usage": {
+                "idioms": {"dar la lata": {"lit": "give the can", "fig": "to annoy"}}
+            }
+        }
+    )
+    [entry] = model.usage.idioms
+    assert entry.term == "dar la lata"
+    assert entry.gloss == "lit: give the can, fig: to annoy"
+
+
+def test_nested_list_value_in_str_list_flattens_readably():
+    model = WordAnalysis.model_validate(
+        {"meaning": {"synonyms": {"animal": ["gato", "felino"]}}}
+    )
+    assert model.meaning.synonyms == ["animal: gato, felino"]
+
+
+def test_list_of_multi_key_dict_expands_each_pair_into_its_own_entry():
+    """A dict without a "term" key expands into one Entry per pair, not one entry."""
+    model = WordAnalysis.model_validate(
+        {"meaning": {"cognates": [{"chat": "cat", "gato": "cat (es)"}]}}
+    )
+    got = [(e.term, e.gloss) for e in model.meaning.cognates]
+    assert got == [("chat", "cat"), ("gato", "cat (es)")]
 
 
 def test_entry_rejects_unknown_keys():

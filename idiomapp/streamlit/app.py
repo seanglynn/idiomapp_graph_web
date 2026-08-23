@@ -2491,47 +2491,27 @@ def _format_entry(item) -> str:
     return str(item)
 
 
-def _as_list(data: dict, key: str, *, limit: int = 8) -> list[str]:
+def _format_entries(data: dict, key: str, *, limit: int = 8) -> list[str]:
     """
-    Normalize data[key] to a list of display strings, truncated to *limit*.
+    Render data[key] as a list of display strings, truncated to *limit*.
 
-    Analysis data reaches the UI already canonicalised by WordAnalysis, so the
-    heterogeneous fields arrive as lists of {term, gloss} entries. The isinstance
-    fallbacks below only cover values that never went through the schema.
+    Analysis data reaches the UI already canonicalised by
+    WordAnalysis.to_display_dict(): every Entries field is a list of
+    {"term", "gloss"} dicts and every StrList field is a flat list of strings -
+    never a bare mapping.
     """
-    val = data.get(key)
-    if not val:
-        return []
-    if isinstance(val, dict):
-        return [f"{k}: {v}" for k, v in val.items()][:limit]
-    items = val if isinstance(val, list) else [val]
-    return [_format_entry(x) for x in items[:limit]]
+    items = data.get(key) or []
+    return [_format_entry(item) for item in items[:limit]]
 
 
 def display_word_analysis(word: str, language: str, analysis_data: dict):
     """Display detailed linguistic analysis of a word in a compact, visual layout."""
     lang_name = LANGUAGE_MAP.get(language, {}).get("name", language.title())
 
-    # Merge nested grammar/pronunciation into top level for uniform access
-    grammar_data = (
-        analysis_data.get("grammar", {})
-        if isinstance(analysis_data.get("grammar"), dict)
-        else {}
-    )
-    for key, value in grammar_data.items():
-        if key not in analysis_data:
-            analysis_data[key] = value
-
-    pron_data = (
-        analysis_data.get("pronunciation", {})
-        if isinstance(analysis_data.get("pronunciation"), dict)
-        else {}
-    )
-
     # ── Compact header bar ──────────────────────────────────────────────────
     pos = analysis_data.get("pos", "")
     definition = analysis_data.get("definition", "")
-    ipa = analysis_data.get("ipa") or pron_data.get("ipa", "")
+    ipa = analysis_data.get("ipa", "")
 
     badges = (
         _badge(pos, "#4361EE")
@@ -2582,14 +2562,14 @@ def display_word_analysis(word: str, language: str, analysis_data: dict):
         _display_word_knowledge_graph(word, language, analysis_data)
 
     with panels_col:
-        _display_analysis_panels(word, language, analysis_data, pron_data)
+        _display_analysis_panels(word, language, analysis_data)
 
     # Raw data at the very bottom, collapsed
     with st.expander("🔧 Raw Data", expanded=False):
         st.json(analysis_data)
 
 
-def _render_origins_tab(d: dict, _pron: dict):
+def _render_origins_tab(d: dict):
     """Render the Origins tab content."""
     if "etymology" in d:
         st.markdown(f"**Origin:** {d['etymology']}")
@@ -2601,33 +2581,37 @@ def _render_origins_tab(d: dict, _pron: dict):
         st.caption(d["historical_evolution"])
     if "cognates" in d:
         st.markdown("**Cognates in other languages:**")
-        st.markdown("  " + " / ".join(f"**{c}**" for c in _as_list(d, "cognates")))
+        st.markdown(
+            "  " + " / ".join(f"**{c}**" for c in _format_entries(d, "cognates"))
+        )
 
 
-def _render_meaning_tab(d: dict, _pron: dict):
+def _render_meaning_tab(d: dict):
     """Render the Meaning tab content."""
     col1, col2 = st.columns(2)
     with col1:
         if "synonyms" in d:
             st.markdown("**Synonyms**")
-            for s in _as_list(d, "synonyms"):
+            for s in _format_entries(d, "synonyms"):
                 st.markdown(f"  - {s}")
         if "hypernym" in d:
             st.markdown(f"**Broader:** {d['hypernym']}")
     with col2:
         if "antonyms" in d:
             st.markdown("**Antonyms**")
-            for a in _as_list(d, "antonyms"):
+            for a in _format_entries(d, "antonyms"):
                 st.markdown(f"  - {a}")
         if "hyponyms" in d:
-            st.markdown(f"**Specific:** {', '.join(_as_list(d, 'hyponyms', limit=5))}")
+            st.markdown(
+                f"**Specific:** {', '.join(_format_entries(d, 'hyponyms', limit=5))}"
+            )
     if "semantic_field" in d:
         st.caption(
-            "Related concept words: " + " / ".join(_as_list(d, "semantic_field"))
+            "Related concept words: " + " / ".join(_format_entries(d, "semantic_field"))
         )
 
 
-def _render_grammar_tab(d: dict, _pron: dict):
+def _render_grammar_tab(d: dict):
     """Render the Grammar tab content with POS-specific logic."""
     pos = d.get("pos", "")
     if pos == "VERB":
@@ -2642,46 +2626,46 @@ def _render_grammar_tab(d: dict, _pron: dict):
         st.caption(f"📖 {d['grammar_notes']}")
 
 
-def _render_usage_tab(d: dict, _pron: dict):
+def _render_usage_tab(d: dict):
     """Render the Usage tab content."""
-    for i, ex in enumerate(_as_list(d, "examples", limit=5), 1):
+    for i, ex in enumerate(_format_entries(d, "examples", limit=5), 1):
         st.markdown(f"{i}. *{ex}*")
-    collocs = _as_list(d, "collocations", limit=10)
+    collocs = _format_entries(d, "collocations", limit=10)
     if collocs:
         st.markdown("**Common collocations:** " + " / ".join(f"`{c}`" for c in collocs))
     if "regional_variations" in d:
         st.info(f"🌍 {d['regional_variations']}")
 
 
-def _render_idioms_tab(d: dict, _pron: dict):
+def _render_idioms_tab(d: dict):
     """Render the Idioms tab content."""
-    for item in _as_list(d, "idioms", limit=6):
+    for item in _format_entries(d, "idioms", limit=6):
         st.markdown(f"- *{item}*")
-    for p in _as_list(d, "proverbs", limit=3):
+    for p in _format_entries(d, "proverbs", limit=3):
         st.markdown(f"- *{p}*")
     if "slang_usage" in d:
         st.caption(f"🗣️ Slang: {d['slang_usage']}")
 
 
-def _render_tips_tab(d: dict, _pron: dict):
+def _render_tips_tab(d: dict):
     """Render the Tips tab content."""
     if "cultural_notes" in d:
         st.info(d["cultural_notes"])
-    false_friends = _as_list(d, "false_friends")
+    false_friends = _format_entries(d, "false_friends")
     if false_friends:
         st.warning("⚠️ False friends: " + ", ".join(false_friends))
-    for m in _as_list(d, "common_mistakes"):
+    for m in _format_entries(d, "common_mistakes"):
         st.error(f"  ✗ {m}", icon=None)
-    for t in _as_list(d, "tips", limit=4):
+    for t in _format_entries(d, "tips", limit=4):
         st.success(f"💡 {t}")
 
 
-def _render_sound_tab(d: dict, pron: dict):
+def _render_sound_tab(d: dict):
     """Render the Sound tab content."""
-    ipa = d.get("ipa") or pron.get("ipa")
-    syllables = d.get("syllables") or pron.get("syllables")
-    stress = d.get("stress") or pron.get("stress")
-    notes = d.get("pronunciation_notes") or pron.get("pronunciation_notes")
+    ipa = d.get("ipa")
+    syllables = d.get("syllables")
+    stress = d.get("stress")
+    notes = d.get("pronunciation_notes")
     if ipa:
         st.markdown(f"**IPA:** `/{ipa}/`")
     if syllables:
@@ -2728,15 +2712,12 @@ _TAB_DEFS = [
 ]
 
 
-def _display_analysis_panels(
-    word: str, language: str, analysis_data: dict, pron_data: dict
-):
+def _display_analysis_panels(word: str, language: str, analysis_data: dict):
     """Render tabbed detail panels, showing only tabs that have data."""
     active = [
         (label, fn)
         for label, keys, fn in _TAB_DEFS
         if any(k in analysis_data for k in keys)
-        or (fn is _render_sound_tab and pron_data)
     ]
     if not active:
         st.info(
@@ -2747,18 +2728,7 @@ def _display_analysis_panels(
     tabs = st.tabs([label for label, _ in active])
     for tab, (_, render_fn) in zip(tabs, active):
         with tab:
-            render_fn(analysis_data, pron_data)
-
-
-def _normalize_items(val) -> list[str]:
-    """Normalize a value from analysis data into a flat list of display strings."""
-    if not val:
-        return []
-    if isinstance(val, dict):
-        return [f"{k}: {v}" for k, v in val.items()]
-    if isinstance(val, list):
-        return [_format_entry(x) for x in val]
-    return [str(val)]
+            render_fn(analysis_data)
 
 
 # Graph category config: (data_key, label, color)
@@ -2861,24 +2831,14 @@ def _display_word_knowledge_graph(word: str, language: str, analysis_data: dict)
 
     # Standard categories — uniform loop
     for key, label, color in _GRAPH_CATEGORIES:
-        items = _normalize_items(analysis_data.get(key))
+        items = _format_entries(analysis_data, key)
         if items:
             add_category(key, label, color, items)
 
-    # Conjugations — dict needs special formatting
-    grammar_data = (
-        analysis_data.get("grammar", {})
-        if isinstance(analysis_data.get("grammar"), dict)
-        else {}
-    )
-    conj = analysis_data.get("conjugations") or grammar_data.get("conjugations")
-    if conj and isinstance(conj, dict):
-        add_category(
-            "conjugations",
-            "📝 Conjugations",
-            "#2ECC71",
-            [f"{t}: {f}" for t, f in list(conj.items())[:6]],
-        )
+    # Conjugations — Entries, e.g. {"term": "present", "gloss": "es"}
+    conj = _format_entries(analysis_data, "conjugations", limit=6)
+    if conj:
+        add_category("conjugations", "📝 Conjugations", "#2ECC71", conj)
 
     # Examples — truncate long strings
     examples = analysis_data.get("examples", [])
@@ -2894,13 +2854,11 @@ def _display_word_knowledge_graph(word: str, language: str, analysis_data: dict)
         ("infinitive", "Infinitive"),
         ("verb_type", "Verb type"),
     ]:
-        val = analysis_data.get(fkey) or grammar_data.get(fkey)
+        val = analysis_data.get(fkey)
         if val:
             forms.append(f"{flabel}: {val}")
-    for dict_key in ("gender_forms", "related_forms"):
-        sub = analysis_data.get(dict_key, {})
-        if isinstance(sub, dict):
-            forms.extend(f"{k}: {v}" for k, v in sub.items())
+    for entries_key in ("gender_forms", "related_forms"):
+        forms.extend(_format_entries(analysis_data, entries_key))
     if forms:
         add_category("forms", "📋 Forms", "#4CAF50", forms)
 
@@ -2918,9 +2876,9 @@ def _display_word_knowledge_graph(word: str, language: str, analysis_data: dict)
     st.components.v1.html(html_content, height=500)
 
 
-def _show_dict_items(d: dict, key: str, heading: str):
-    """Render an entry field as a titled list of lines."""
-    items = _as_list(d, key)
+def _show_entries(d: dict, key: str, heading: str):
+    """Render an Entries or StrList field as a titled bullet list."""
+    items = _format_entries(d, key)
     if not items:
         return
     st.markdown(f"**{heading}:**")
@@ -2930,7 +2888,7 @@ def _show_dict_items(d: dict, key: str, heading: str):
 
 def _show_examples(d: dict):
     """Render numbered usage examples."""
-    items = _as_list(d, "examples", limit=5)
+    items = _format_entries(d, "examples", limit=5)
     if items:
         st.markdown("**Usage Examples:**")
         for i, ex in enumerate(items, 1):
@@ -2945,12 +2903,12 @@ def _display_verb_analysis(d: dict):
             st.markdown(f"**Infinitive:** {d['infinitive']}")
         if "verb_type" in d:
             st.markdown(f"**Verb Type:** {d['verb_type']}")
-        _show_dict_items(d, "conjugations", "Key Conjugations")
+        _show_entries(d, "conjugations", "Key Conjugations")
     with col2:
-        _show_dict_items(d, "related_forms", "Related Forms")
+        _show_entries(d, "related_forms", "Related Forms")
         if "synonyms" in d:
             st.markdown("**Synonyms:**")
-            for s in _as_list(d, "synonyms"):
+            for s in _format_entries(d, "synonyms"):
                 st.markdown(f"- {s}")
     _show_examples(d)
     if "grammar_notes" in d:
@@ -2965,12 +2923,12 @@ def _display_noun_analysis(d: dict):
             st.markdown(f"**Gender:** {d['gender']}")
         if "plural" in d:
             st.markdown(f"**Plural:** {d['plural']}")
-        _show_dict_items(d, "articles", "Articles")
+        _show_entries(d, "articles", "Articles")
     with col2:
-        _show_dict_items(d, "related_forms", "Related Forms")
+        _show_entries(d, "related_forms", "Related Forms")
         if "synonyms" in d:
             st.markdown("**Synonyms:**")
-            for s in _as_list(d, "synonyms"):
+            for s in _format_entries(d, "synonyms"):
                 st.markdown(f"- {s}")
     _show_examples(d)
     if "cultural_notes" in d:
@@ -2981,16 +2939,16 @@ def _display_adjective_analysis(d: dict):
     """Display adjective-specific analysis."""
     col1, col2 = st.columns(2)
     with col1:
-        _show_dict_items(d, "gender_forms", "Gender Forms")
-        _show_dict_items(d, "comparison", "Comparison Forms")
+        _show_entries(d, "gender_forms", "Gender Forms")
+        _show_entries(d, "comparison", "Comparison Forms")
     with col2:
         if "synonyms" in d:
             st.markdown("**Synonyms:**")
-            for s in _as_list(d, "synonyms"):
+            for s in _format_entries(d, "synonyms"):
                 st.markdown(f"- {s}")
         if "antonyms" in d:
             st.markdown("**Antonyms:**")
-            for a in _as_list(d, "antonyms"):
+            for a in _format_entries(d, "antonyms"):
                 st.markdown(f"- {a}")
     _show_examples(d)
     if "position" in d:
@@ -3003,7 +2961,7 @@ def _display_generic_analysis(d: dict):
         st.markdown(f"**Definition:** {d['definition']}")
     if "related_words" in d:
         st.markdown("**Related Words:**")
-        for w in _as_list(d, "related_words"):
+        for w in _format_entries(d, "related_words"):
             st.markdown(f"- {w}")
     _show_examples(d)
     if "grammar_notes" in d:
@@ -3689,18 +3647,19 @@ def main():
                                 and trans["lang_code"]
                             ):
                                 tts_key = f"tts_output_{hash(trans['text'] + trans['lang_code'])}"
-                                # Create a compact button row
-                                tts_col1, tts_col2 = st.columns([1, 20])
-                                with tts_col1:
-                                    if st.button(
-                                        "🔊",
-                                        key=tts_key,
-                                        help=f"Play audio in {trans['lang_display'] or trans['lang_code']}",
-                                        use_container_width=False,
-                                    ):
-                                        text_to_speech(
-                                            trans["text"], trans["lang_code"], tts_key
-                                        )
+                                # Streamlit allows only one level of column nesting, and
+                                # this already sits two levels deep (main_col > output_col).
+                                # use_container_width=False already keeps the button
+                                # compact, so no column wrapper is needed for that.
+                                if st.button(
+                                    "🔊",
+                                    key=tts_key,
+                                    help=f"Play audio in {trans['lang_display'] or trans['lang_code']}",
+                                    use_container_width=False,
+                                ):
+                                    text_to_speech(
+                                        trans["text"], trans["lang_code"], tts_key
+                                    )
                 else:
                     # Empty state - light text for dark theme
                     st.markdown(

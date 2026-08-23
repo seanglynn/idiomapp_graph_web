@@ -27,7 +27,7 @@ Nothing about a field's meaning is hand-duplicated as separate prompt text.
 import json
 from typing import Annotated, Any, Optional, get_origin
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
 
 class Entry(BaseModel):
@@ -61,7 +61,10 @@ def _to_entries(value: Any) -> Any:
                 if "term" in item:
                     entries.append(item)
                 else:
-                    # A single-pair dict inside a list, e.g. [{"expr": "meaning"}]
+                    # A dict without "term" is treated as term:gloss pairs to
+                    # expand - not just the single-pair case shown above, but any
+                    # dict: two pairs in one list item become two separate Entry
+                    # objects, not one malformed one.
                     entries.extend(
                         {"term": str(k), "gloss": _stringify(v)}
                         for k, v in item.items()
@@ -86,11 +89,11 @@ def _to_str_list(value: Any) -> Any:
 
 
 def _stringify(value: Any) -> str:
-    """Render a leaf value for display, flattening nested containers readably."""
+    """Render a leaf value for display, flattening nested containers readably at any depth."""
     if isinstance(value, dict):
-        return ", ".join(f"{k}: {v}" for k, v in value.items())
+        return ", ".join(f"{k}: {_stringify(v)}" for k, v in value.items())
     if isinstance(value, list):
-        return ", ".join(str(item) for item in value)
+        return ", ".join(_stringify(item) for item in value)
     return str(value)
 
 
@@ -294,9 +297,9 @@ class LearnerNotes(BaseModel):
     )
 
 
-# The WordAnalysis groups, in the order they are presented. Shared by the model
-# below (for regrouping flat provider output) and by nlp_utils (for issuing one
-# call per group) - one registry, so the two can never drift apart.
+# The WordAnalysis groups, in the order they are presented - as its five field
+# names. Shared by nlp_utils, which issues one call per group concurrently rather
+# than sending WordAnalysis itself to a provider in one piece (see its docstring).
 WORD_ANALYSIS_GROUPS: dict[str, type[BaseModel]] = {
     "meaning": Meaning,
     "usage": Usage,
@@ -304,20 +307,6 @@ WORD_ANALYSIS_GROUPS: dict[str, type[BaseModel]] = {
     "pronunciation": Pronunciation,
     "learner_notes": LearnerNotes,
 }
-
-
-def _build_field_to_group() -> dict[str, str]:
-    """Map every group field name (and JSON alias) to the group that owns it."""
-    mapping: dict[str, str] = {}
-    for group_name, model in WORD_ANALYSIS_GROUPS.items():
-        for field_name, info in model.model_fields.items():
-            mapping[field_name] = group_name
-            if info.alias:
-                mapping[info.alias] = group_name
-    return mapping
-
-
-_FIELD_TO_GROUP = _build_field_to_group()
 
 
 class WordAnalysis(BaseModel):
@@ -343,6 +332,14 @@ class WordAnalysis(BaseModel):
     that merge is validated through, and what every provider's output - Claude's
     structured, Ollama/OpenAI's tolerant-parsed - ultimately normalises to.
 
+    ``model_validate`` therefore expects group-nested input only - the shape
+    ``_get_llm_word_analysis``'s merge always produces (``{"meaning": {...},
+    "usage": {...}, ...}``). A flat dict such as ``{"definition": "x"}`` at the
+    root populates nothing: this model has ``extra="ignore"`` and ``"definition"``
+    is not one of its five field names. An earlier version folded flat keys into
+    their owning group via a ``model_validator``, but no call site ever passed it
+    flat input - it was dead code, and has been removed.
+
     Deliberately does NOT include the spaCy-derived keys (``pos``, ``lemma``,
     ``is_alpha``, ``vector_norm``, ...). Those are set by
     ``nlp_utils.analyze_word_linguistics`` before the LLM is called, and the validated
@@ -356,35 +353,6 @@ class WordAnalysis(BaseModel):
     grammar: Grammar = Field(default_factory=Grammar)
     pronunciation: Pronunciation = Field(default_factory=Pronunciation)
     learner_notes: LearnerNotes = Field(default_factory=LearnerNotes)
-
-    @model_validator(mode="before")
-    @classmethod
-    def _regroup_flat_fields(cls, data: Any) -> Any:
-        """
-        Fold a provider's flat field names into their group before validation.
-
-        Claude is schema-constrained per group and always returns each group's
-        shape correctly, but Ollama and OpenAI are only prompted for it - a model
-        that ignores the nesting and answers with ``{"definition": ..., "ipa":
-        ...}`` at the top level would otherwise have every one of those fields
-        silently dropped by ``extra="ignore"``. This is also what makes a plain
-        display dict (already flat) round-trip through ``model_validate`` unchanged.
-        """
-        if not isinstance(data, dict):
-            return data
-
-        data = dict(data)
-        for key in list(data.keys()):
-            if key in WORD_ANALYSIS_GROUPS:
-                continue
-            group_name = _FIELD_TO_GROUP.get(key)
-            if group_name is None:
-                continue
-            bucket = data.setdefault(group_name, {})
-            if isinstance(bucket, dict) and key not in bucket:
-                bucket[key] = data.pop(key)
-
-        return data
 
     def to_display_dict(self) -> dict:
         """
