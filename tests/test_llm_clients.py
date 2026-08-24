@@ -555,14 +555,20 @@ async def test_spacy_keys_survive_llm_merge():
     """
     import spacy
 
+    from idiomapp.utils.analysis_cache import InMemoryWordAnalysisCache
     from idiomapp.utils.nlp_utils import analyze_word_linguistics
 
     client = MagicMock()
     client.generate_json = AsyncMock(return_value={"definition": "a cat"})
-    client.get_model_status = MagicMock(return_value={"available": True})
+    client.get_model_status = MagicMock(
+        return_value={"available": True, "provider": "anthropic", "model_name": "m"}
+    )
 
     with patch(
         "idiomapp.utils.nlp_utils.load_spacy_model", return_value=spacy.blank("es")
+    ), patch(
+        "idiomapp.utils.nlp_utils.get_word_analysis_cache",
+        return_value=InMemoryWordAnalysisCache(),
     ):
         analysis = await analyze_word_linguistics("gato", "es", client)
 

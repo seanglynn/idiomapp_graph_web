@@ -17,24 +17,27 @@ from idiomapp.utils.llm_utils import (
 from idiomapp.utils.ollama_utils import get_available_models
 from idiomapp.utils.async_utils import run_async
 from idiomapp.utils.schemas import Translation
-from idiomapp.utils.state_utils import get_llm_client
+from idiomapp.utils.state_utils import get_llm_client, get_provider_credentials
 from idiomapp.utils.logging_utils import get_logger, get_recent_logs, clear_logs
 from idiomapp.utils.graph_storage import get_graph_storage
 from idiomapp.config import (
     settings,
     LANGUAGE_MAP,
+    LLMProvider,
     POS_BORDER_COLORS,
     GROUP_COLORS,
     RELATION_COLORS,
 )
 from idiomapp.utils.nlp_utils import (
-    analyze_parts_of_speech,
     split_into_sentences,
-    calculate_word_similarity,
     build_word_cooccurrence_network,
     detect_language,
     get_language_color,
     analyze_word_linguistics,
+    process_sentence_pair,
+    add_cross_sentence_relationships,
+    add_cross_language_relationships,
+    merge_language_graphs,
 )
 from idiomapp.utils.audio_utils import generate_audio, process_translation_audio
 
@@ -55,22 +58,35 @@ st.set_page_config(
 st.markdown(
     """
 <style>
-    /* Improve chat message readability for dark theme */
-    .chat-message-user {
+    /* Improve chat message readability for dark theme. A second, conflicting copy
+       of these two rules used to be injected on every rerun inside main()'s chat
+       sidebar; these are the values that actually rendered once both were merged
+       by the browser's CSS cascade (padding kept its !important from this block,
+       the rest - border-radius/border-left width/background-color/font-size -
+       came from the later, more specific block and are folded in here). */
+    .chat-message-user, .chat-message-ai {
         padding: 15px !important;
-        border-radius: 10px;
         margin-bottom: 15px;
-        border-left: 5px solid #4361EE;
+        border-radius: 5px;
+        font-size: 0.9em;
         white-space: pre-wrap;
+    }
+    .chat-message-user {
+        border-left: 3px solid #4361EE;
+        background-color: rgba(67, 97, 238, 0.1);
         box-shadow: 0 2px 4px rgba(0,0,0,0.3);
     }
     .chat-message-ai {
-        padding: 15px !important;
-        border-radius: 10px;
-        margin-bottom: 15px;
-        border-left: 5px solid #4CC9F0;
-        white-space: pre-wrap;
+        border-left: 3px solid #4CC9F0;
+        background-color: rgba(76, 201, 240, 0.1);
         box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+    }
+    audio::-webkit-media-controls-panel {
+        background-color: #333333;
+    }
+    audio::-webkit-media-controls-play-button {
+        background-color: #4361EE;
+        border-radius: 50%;
     }
     /* Style the TTS button for dark theme */
     .stButton button[data-testid^="tts_"] {
@@ -121,38 +137,21 @@ st.markdown(
 
 
 # Helper functions for language selection UI
-def format_language_option(lang_code: str) -> str:
+def get_index(item_list: list, target: str, default: int = 0) -> int:
     """
-    Format a language code for display in selectboxes.
+    Safely get the index of an item in a list (language, model, or provider).
 
     Args:
-        lang_code: Language code (e.g., 'en', 'es', 'ca')
-
-    Returns:
-        Formatted string with language name and flag emoji
-    """
-    if lang_code in LANGUAGE_MAP:
-        lang_info = LANGUAGE_MAP[lang_code]
-        return f"{lang_info['name']} {lang_info['flag']}"
-    # Fallback if language code not found
-    return lang_code.upper()
-
-
-def get_language_index(language_list: list, target_lang: str, default: int = 0) -> int:
-    """
-    Safely get the index of a language in a list.
-
-    Args:
-        language_list: List of language codes
-        target_lang: Language code to find
+        item_list: List of items (language codes, model names, or provider names)
+        target: Item to find
         default: Default index to return if not found
 
     Returns:
-        Index of target_lang in language_list, or default if not found
+        Index of target in item_list, or default if not found
     """
     try:
-        if target_lang in language_list:
-            return language_list.index(target_lang)
+        if target in item_list:
+            return item_list.index(target)
     except (ValueError, TypeError, AttributeError):
         pass
     return default
@@ -264,48 +263,6 @@ def format_provider_name(provider: str) -> str:
     return PROVIDER_DISPLAY_NAMES.get(provider, provider.title())
 
 
-def get_model_index(model_list: list, target_model: str, default: int = 0) -> int:
-    """
-    Safely get the index of a model in a list.
-
-    Args:
-        model_list: List of model names
-        target_model: Model name to find
-        default: Default index to return if not found
-
-    Returns:
-        Index of target_model in model_list, or default if not found
-    """
-    try:
-        if target_model in model_list:
-            return model_list.index(target_model)
-    except (ValueError, TypeError, AttributeError):
-        pass
-    return default
-
-
-def get_provider_index(
-    provider_list: list, target_provider: str, default: int = 0
-) -> int:
-    """
-    Safely get the index of a provider in a list.
-
-    Args:
-        provider_list: List of provider names
-        target_provider: Provider name to find
-        default: Default index to return if not found
-
-    Returns:
-        Index of target_provider in provider_list, or default if not found
-    """
-    try:
-        if target_provider in provider_list:
-            return provider_list.index(target_provider)
-    except (ValueError, TypeError, AttributeError):
-        pass
-    return default
-
-
 def format_pos_option(pos_tag: str, pos_options: list) -> str:
     """
     Format part-of-speech tag for display.
@@ -323,23 +280,6 @@ def format_pos_option(pos_tag: str, pos_options: list) -> str:
     return pos_tag
 
 
-def create_pos_format_func(pos_options: list):
-    """
-    Create a format function for POS tags.
-
-    Args:
-        pos_options: List of (name, tag) tuples
-
-    Returns:
-        Format function that takes a POS tag and returns its display name
-    """
-
-    def format_func(pos_tag: str) -> str:
-        return format_pos_option(pos_tag, pos_options)
-
-    return format_func
-
-
 def format_documentation_file(index: int, file_names: list) -> str:
     """
     Format documentation file name for display.
@@ -354,23 +294,6 @@ def format_documentation_file(index: int, file_names: list) -> str:
     if 0 <= index < len(file_names):
         return file_names[index]
     return ""
-
-
-def create_documentation_format_func(file_names: list):
-    """
-    Create a format function for documentation file names.
-
-    Args:
-        file_names: List of file names
-
-    Returns:
-        Format function that takes an index and returns the file name
-    """
-
-    def format_func(index: int) -> str:
-        return format_documentation_file(index, file_names)
-
-    return format_func
 
 
 def get_centrality_sort_key(item: tuple) -> float:
@@ -399,21 +322,6 @@ def build_model_label(model_type: str, is_available: bool) -> str:
     """
     warning = "" if is_available else "⚠️"
     return f"{model_type} {warning}".strip()
-
-
-def is_model_enabled(provider: str, current_provider: str, is_available: bool) -> bool:
-    """
-    Check if model selection should be enabled.
-
-    Args:
-        provider: Provider type to check ('ollama' or 'openai')
-        current_provider: Current selected provider
-        is_available: Whether model is available
-
-    Returns:
-        True if model should be enabled, False otherwise
-    """
-    return is_available and current_provider == provider
 
 
 def extract_translation_text(message_content: str) -> tuple[str, str]:
@@ -587,10 +495,19 @@ def render_chat_message(message, role, target_lang=None, source_lang="en"):
                                     # Prepare the translation text with the language header
                                     translation_text = f"{segment['lang_name']} {segment['flag']}: {segment['content']}"
 
-                                    # Generate the audio HTML for this segment
-                                    audio_html = process_translation_audio(
-                                        translation_text, source_lang, lang_code
+                                    # Generate the audio HTML for this segment, caching
+                                    # by content+language so an unchanged segment does
+                                    # not re-hit the gTTS network call on every rerun.
+                                    cache_key = (
+                                        f"audio_{hash(translation_text + lang_code)}"
                                     )
+                                    if cache_key in st.session_state:
+                                        audio_html = st.session_state[cache_key]
+                                    else:
+                                        audio_html = process_translation_audio(
+                                            translation_text, source_lang, lang_code
+                                        )
+                                        st.session_state[cache_key] = audio_html
 
                                     # Show the audio player with a clear label
                                     st.markdown(
@@ -620,10 +537,17 @@ def render_chat_message(message, role, target_lang=None, source_lang="en"):
                 model_available = st.session_state.get("model_available", False)
                 if model_available and role == "assistant" and target_lang:
                     try:
-                        # Generate audio for this message
-                        audio_html = process_translation_audio(
-                            message, source_lang, target_lang
-                        )
+                        # Generate audio for this message, caching by content+language
+                        # so an unchanged message does not re-hit the gTTS network
+                        # call on every rerun.
+                        cache_key = f"audio_{hash(message + target_lang)}"
+                        if cache_key in st.session_state:
+                            audio_html = st.session_state[cache_key]
+                        else:
+                            audio_html = process_translation_audio(
+                                message, source_lang, target_lang
+                            )
+                            st.session_state[cache_key] = audio_html
                         st.markdown(audio_html, unsafe_allow_html=True)
                     except Exception as e:
                         logger.error(f"Error generating audio: {str(e)}")
@@ -900,349 +824,6 @@ async def analyze_translation(source_text, target_texts, target_langs):
     return graph_data
 
 
-def process_sentence_pair(
-    source_sentence,
-    target_sentence,
-    source_lang,
-    target_lang,
-    graph_data,
-    added_nodes,
-    word_relations_cache,
-    sentence_group="",
-):
-    """Process a pair of sentences in different languages and add them to the graph"""
-
-    logger.info(f"Processing sentence pair: {source_lang} to {target_lang}")
-
-    try:
-        # Analyze parts of speech for source and target sentence
-        source_pos = analyze_parts_of_speech(source_sentence, source_lang)
-        target_pos = analyze_parts_of_speech(target_sentence, target_lang)
-
-        # Add source words as nodes
-        for word_data in source_pos:
-            # Handle string input case (from fallback tokenization)
-            if isinstance(word_data, str):
-                word = word_data
-                pos = "unknown"
-                details = ""
-            else:
-                # Normal dictionary case
-                word = word_data["word"]
-                pos = word_data["pos"]
-                details = word_data.get("details", "")
-
-            # Create unique ID for node
-            node_id = f"{word}_{source_lang}{sentence_group}"
-
-            # Skip if already added
-            if node_id in added_nodes:
-                continue
-
-            # Add node to graph
-            graph_data["nodes"].append(
-                {
-                    "id": node_id,
-                    "label": word,
-                    "language": source_lang,
-                    "pos": pos,
-                    "details": details,
-                    "node_type": "primary",
-                    "group": f"{source_lang}{sentence_group}",
-                    "sentence_group": sentence_group,
-                }
-            )
-            added_nodes.add(node_id)
-
-        # Add target words as nodes
-        for word_data in target_pos:
-            # Handle string input case (from fallback tokenization)
-            if isinstance(word_data, str):
-                word = word_data
-                pos = "unknown"
-                details = ""
-            else:
-                # Normal dictionary case
-                word = word_data["word"]
-                pos = word_data["pos"]
-                details = word_data.get("details", "")
-
-            # Create unique ID for node
-            node_id = f"{word}_{target_lang}{sentence_group}"
-
-            # Skip if already added
-            if node_id in added_nodes:
-                continue
-
-            # Add node to graph
-            graph_data["nodes"].append(
-                {
-                    "id": node_id,
-                    "label": word,
-                    "language": target_lang,
-                    "pos": pos,
-                    "details": details,
-                    "node_type": "primary",
-                    "group": f"{target_lang}{sentence_group}",
-                    "sentence_group": sentence_group,
-                }
-            )
-            added_nodes.add(node_id)
-
-        # Add edges between source and target words based on alignment
-        for source_word_data in source_pos:
-            # Handle string input case (from fallback tokenization)
-            if isinstance(source_word_data, str):
-                source_word = source_word_data
-                source_pos_val = "unknown"
-            else:
-                # Normal dictionary case
-                source_word = source_word_data["word"]
-                source_pos_val = source_word_data["pos"]
-
-            source_id = f"{source_word}_{source_lang}{sentence_group}"
-
-            # For each target word, establish a direct translation edge if appropriate
-            for target_word_data in target_pos:
-                # Handle string input case (from fallback tokenization)
-                if isinstance(target_word_data, str):
-                    target_word = target_word_data
-                    target_pos_val = "unknown"
-                else:
-                    # Normal dictionary case
-                    target_word = target_word_data["word"]
-                    target_pos_val = target_word_data["pos"]
-
-                target_id = f"{target_word}_{target_lang}{sentence_group}"
-
-                try:
-                    # Use enhanced word similarity analysis
-                    similarity_info = calculate_word_similarity(
-                        source_word, target_word, source_lang, target_lang
-                    )
-
-                    # Basic sanity check for similarity_info structure
-                    if not isinstance(similarity_info, dict):
-                        logger.error(
-                            f"Invalid similarity_info type: {type(similarity_info)} for {source_word}/{target_word}"
-                        )
-                        # Create a default similarity info dictionary
-                        similarity_info = {
-                            "score": 0.0,
-                            "relationship_type": "unknown",
-                            "description": "Unable to determine relationship",
-                            "linguistic_features": {},
-                        }
-
-                    # Safely extract data
-                    similarity_score = similarity_info.get("score", 0)
-                    relationship_type = similarity_info.get(
-                        "relationship_type", "unknown"
-                    )
-                    relationship_description = similarity_info.get(
-                        "description", "Related words"
-                    )
-
-                    # Only add edges for words that seem related above a threshold
-                    if similarity_score > 0.3:
-                        # Create a detailed label based on the relationship type
-                        if relationship_type == "direct_translation":
-                            edge_label = "direct translation"
-                        elif relationship_type == "cognate":
-                            edge_label = "cognate"
-                        elif relationship_type == "semantic_equivalent":
-                            edge_label = "equivalent"
-                        else:
-                            edge_label = relationship_type.replace("_", " ")
-
-                        # Create detailed tooltip with linguistic information
-                        linguistic_features = similarity_info.get(
-                            "linguistic_features", {}
-                        )
-                        pos_match = linguistic_features.get("pos_match", False)
-                        is_cognate = linguistic_features.get("is_cognate", False)
-
-                        # Build tooltip with rich information
-                        tooltip_parts = [
-                            f"{relationship_description}",
-                            f"Source: {source_word} ({source_pos_val})"
-                            if source_pos_val
-                            else f"Source: {source_word}",
-                            f"Target: {target_word} ({target_pos_val})"
-                            if target_pos_val
-                            else f"Target: {target_word}",
-                        ]
-
-                        if pos_match:
-                            tooltip_parts.append("Same part of speech ✓")
-
-                        if is_cognate:
-                            tooltip_parts.append("Historical cognate words ✓")
-
-                        # Add edit distance if available
-                        edit_distance = linguistic_features.get("edit_distance")
-                        if edit_distance:
-                            tooltip_parts.append(
-                                f"String similarity: {edit_distance:.2f}"
-                            )
-
-                        tooltip = "; ".join(tooltip_parts)
-
-                        # Add translation edge
-                        graph_data["edges"].append(
-                            {
-                                "from": source_id,
-                                "to": target_id,
-                                "relation": relationship_type,
-                                "strength": similarity_score,
-                                "label": edge_label,
-                                "description": relationship_description,
-                                "title": tooltip,  # This will be used for the edge tooltip
-                            }
-                        )
-                except Exception as e:
-                    logger.error(
-                        f"Error processing word pair {source_word}/{target_word}: {type(e).__name__}: {str(e)}"
-                    )
-                    continue
-
-        # Process related words for source and target sentences
-        try:
-            process_related_words(
-                source_pos,
-                source_lang,
-                target_lang,
-                graph_data,
-                added_nodes,
-                word_relations_cache,
-                sentence_group,
-            )
-        except Exception as e:
-            logger.error(
-                f"Error processing source related words: {type(e).__name__}: {str(e)}"
-            )
-
-        try:
-            process_related_words(
-                target_pos,
-                target_lang,
-                source_lang,
-                graph_data,
-                added_nodes,
-                word_relations_cache,
-                sentence_group,
-                is_target=True,
-            )
-        except Exception as e:
-            logger.error(
-                f"Error processing target related words: {type(e).__name__}: {str(e)}"
-            )
-
-    except Exception as e:
-        logger.error(f"Error in process_sentence_pair: {type(e).__name__}: {str(e)}")
-        # Don't re-raise - allow processing to continue with other sentences
-
-
-def add_cross_sentence_relationships(graph_data):
-    """Add relationships between words across different sentences"""
-    try:
-        # Group nodes by sentence
-        sentence_groups = {}
-        for node in graph_data["nodes"]:
-            group = node.get("sentence_group", "")
-            if group not in sentence_groups:
-                sentence_groups[group] = []
-            sentence_groups[group].append(node)
-
-        # Create connections between related words in different sentences
-        processed_pairs = set()
-
-        for group1, nodes1 in sentence_groups.items():
-            for group2, nodes2 in sentence_groups.items():
-                # Skip same group or already processed pairs
-                if group1 == group2 or (group1, group2) in processed_pairs:
-                    continue
-
-                processed_pairs.add((group1, group2))
-                processed_pairs.add((group2, group1))
-
-                # Find words with same part of speech to connect
-                for node1 in nodes1:
-                    # Skip non-primary nodes and nodes with unknown pos
-                    if node1.get("node_type", "") != "primary":
-                        continue
-
-                    pos1 = node1.get("pos", "unknown")
-                    if pos1 == "unknown":
-                        continue
-
-                    # Find matching POS in the other sentence
-                    for node2 in nodes2:
-                        # Skip non-primary nodes and nodes with different languages
-                        if node2.get("node_type", "") != "primary" or node2.get(
-                            "language", ""
-                        ) != node1.get("language", ""):
-                            continue
-
-                        pos2 = node2.get("pos", "unknown")
-                        if pos2 == pos1:
-                            try:
-                                # Use the enhanced similarity function for words in the same language
-                                similarity_info = calculate_word_similarity(
-                                    node1["label"],
-                                    node2["label"],
-                                    node1.get("language", "en"),
-                                    node2.get("language", "en"),
-                                )
-
-                                # Extract similarity score and information
-                                if not isinstance(similarity_info, dict):
-                                    logger.warning(
-                                        "Invalid similarity_info format for cross-sentence comparison"
-                                    )
-                                    continue
-
-                                similarity_score = similarity_info.get("score", 0)
-                                similarity_info.get(
-                                    "relationship_type", "cross_sentence"
-                                )
-                                description = similarity_info.get(
-                                    "description",
-                                    f"Related {pos1} words across sentences",
-                                )
-
-                                # Connect only if there's some similarity or same POS for key types
-                                if similarity_score >= 0.3 or pos1 in [
-                                    "noun",
-                                    "verb",
-                                    "adjective",
-                                ]:
-                                    # Create a tooltip with linguistic information
-                                    tooltip = f"{description}; Same part of speech: {pos1}; Similarity: {similarity_score:.2f}"
-
-                                    graph_data["edges"].append(
-                                        {
-                                            "from": node1["id"],
-                                            "to": node2["id"],
-                                            "relation": "cross_sentence",
-                                            "strength": max(0.4, similarity_score),
-                                            "label": f"related {pos1}",
-                                            "description": description,
-                                            "title": tooltip,
-                                            "color": "#AA44BB",  # Purple for cross-sentence
-                                            "dashes": True,
-                                        }
-                                    )
-                            except Exception as e:
-                                logger.error(
-                                    f"Error in cross-sentence processing: {str(e)}"
-                                )
-                                continue
-    except Exception as e:
-        logger.error(f"Error in add_cross_sentence_relationships: {str(e)}")
-        # Don't re-raise, allow processing to continue
-
-
 # Add this helper function right before the visualize_translation_graph function
 def sanitize_tooltip_text(text):
     """
@@ -1263,91 +844,36 @@ def sanitize_tooltip_text(text):
     return text
 
 
-def create_node_popup_content(
-    word: str, pos: str, language: str, details: str = ""
-) -> str:
-    """
-    Create HTML popup content for a graph node.
-
-    Args:
-        word: The word to display
-        pos: Part of speech
-        language: Language code
-        details: Additional details about the word
-
-    Returns:
-        HTML string for the popup
-    """
-    # Language names and flags
-    lang_info = {
-        "en": {"name": "English", "flag": "🇬🇧"},
-        "es": {"name": "Spanish", "flag": "🇪🇸"},
-        "ca": {"name": "Catalan", "flag": "🏴󠁥󠁳󠁣󠁴󠁿"},
-    }
-
-    lang_name = lang_info.get(language, {}).get("name", language.title())
-    lang_flag = lang_info.get(language, {}).get("flag", "")
-
-    # Part of speech with color coding from central config
-    pos_color = POS_BORDER_COLORS.get(pos.lower(), "#4361EE")
-
-    # Create the popup HTML
-    popup_html = f"""
-    <div style="
-        background: #2D2D2D; 
-        border: 2px solid {pos_color}; 
-        border-radius: 10px; 
-        padding: 15px; 
-        color: white; 
-        font-family: Arial, sans-serif; 
-        min-width: 200px;
-        box-shadow: 0 4px 8px rgba(0,0,0,0.5);
-    ">
-        <div style="
-            text-align: center; 
-            margin-bottom: 10px; 
-            font-size: 18px; 
-            font-weight: bold; 
-            color: {pos_color};
-        ">
-            {lang_flag} {word}
-        </div>
-        
-        <div style="
-            text-align: center; 
-            margin-bottom: 15px; 
-            font-size: 14px;
-        ">
-            <span style="
-                background: {pos_color}; 
-                color: white; 
-                padding: 4px 8px; 
-                border-radius: 12px; 
-                font-size: 12px;
-            ">
-                {pos.upper()}
-            </span>
-            <br>
-            <span style="color: #CCCCCC; font-size: 12px;">
-                {lang_name}
-            </span>
-        </div>
-        
-        {f'<div style="text-align: center; margin-bottom: 15px; font-size: 12px; color: #AAAAAA;">{details}</div>' if details else ''}
-
-        <div style="
-            text-align: center;
-            font-size: 12px;
-            color: #999;
-            border-top: 1px solid #444;
-            padding-top: 10px;
-        ">
-            💡 Click for detailed analysis
-        </div>
-    </div>
-    """
-
-    return popup_html
+# Shared pyvis node/edge styling for the translation and co-occurrence graphs -
+# identical in both views; only physics/interaction/manipulation differ per view.
+_PYVIS_SHARED_NODE_EDGE_OPTIONS = """
+  "nodes": {
+    "borderWidth": 2,
+    "borderWidthSelected": 4,
+    "color": {
+      "border": "#4361EE",
+      "background": "#4CC9F0"
+    },
+    "font": {
+      "size": 16,
+      "face": "Arial",
+      "color": "#FAFAFA"
+    },
+    "shadow": true
+  },
+  "edges": {
+    "color": {
+      "color": "#AAAAAA",
+      "highlight": "#F72585",
+      "hover": "#F72585"
+    },
+    "smooth": {
+      "enabled": true,
+      "type": "dynamic"
+    },
+    "shadow": false,
+    "width": 2
+  }"""
 
 
 def visualize_translation_graph(graph_data):
@@ -1419,35 +945,9 @@ def visualize_translation_graph(graph_data):
     # Set options with dark theme colors and improved physics for force-directed layout
     net.barnes_hut()
     net.set_options(
-        """
-    {
-      "nodes": {
-        "borderWidth": 2,
-        "borderWidthSelected": 4,
-        "color": {
-          "border": "#4361EE",
-          "background": "#4CC9F0"
-        },
-        "font": {
-          "size": 16,
-          "face": "Arial",
-          "color": "#FAFAFA"
-        },
-        "shadow": true
-      },
-      "edges": {
-        "color": {
-          "color": "#AAAAAA",
-          "highlight": "#F72585",
-          "hover": "#F72585"
-        },
-        "smooth": {
-          "enabled": true,
-          "type": "dynamic"
-        },
-        "shadow": false,
-        "width": 2
-      },
+        "{"
+        + _PYVIS_SHARED_NODE_EDGE_OPTIONS
+        + """,
       "physics": {
         "enabled": true,
         "forceAtlas2Based": {
@@ -1481,26 +981,23 @@ def visualize_translation_graph(graph_data):
     """
     )
 
-    # Group colors imported from central config
-    # Add sentence-specific color variations
-    for i in range(1, 10):  # Support up to 10 sentences
-        suffix = f"-s{i}"
-        # Create slight variations for each sentence group
-        GROUP_COLORS[f"en{suffix}"] = adjust_color(GROUP_COLORS["en"], i * 10)
-        GROUP_COLORS[f"es{suffix}"] = adjust_color(GROUP_COLORS["es"], i * 10)
-        GROUP_COLORS[f"ca{suffix}"] = adjust_color(GROUP_COLORS["ca"], i * 10)
-        GROUP_COLORS[f"en-related{suffix}"] = adjust_color(
-            GROUP_COLORS["en-related"], i * 10
-        )
-        GROUP_COLORS[f"es-related{suffix}"] = adjust_color(
-            GROUP_COLORS["es-related"], i * 10
-        )
-        GROUP_COLORS[f"ca-related{suffix}"] = adjust_color(
-            GROUP_COLORS["ca-related"], i * 10
-        )
-
-        # Language name mapping for node tooltips
-        language_names = {"en": "English", "es": "Spanish", "ca": "Catalan"}
+    # Group colors imported from central config. Sentence-specific variations are a
+    # pure function of constants, so derive them once rather than on every render.
+    if "en-s9" not in GROUP_COLORS:
+        for i in range(1, 10):  # Support up to 10 sentences
+            suffix = f"-s{i}"
+            GROUP_COLORS[f"en{suffix}"] = adjust_color(GROUP_COLORS["en"], i * 10)
+            GROUP_COLORS[f"es{suffix}"] = adjust_color(GROUP_COLORS["es"], i * 10)
+            GROUP_COLORS[f"ca{suffix}"] = adjust_color(GROUP_COLORS["ca"], i * 10)
+            GROUP_COLORS[f"en-related{suffix}"] = adjust_color(
+                GROUP_COLORS["en-related"], i * 10
+            )
+            GROUP_COLORS[f"es-related{suffix}"] = adjust_color(
+                GROUP_COLORS["es-related"], i * 10
+            )
+            GROUP_COLORS[f"ca-related{suffix}"] = adjust_color(
+                GROUP_COLORS["ca-related"], i * 10
+            )
 
     # POS color accents imported from central config
 
@@ -1523,24 +1020,12 @@ def visualize_translation_graph(graph_data):
             size = 20  # Smaller size for related words
 
         # Get proper language name for tooltip
-        lang_name = language_names.get(node_lang, node_lang.upper())
+        lang_name = get_language_name(node_lang)
 
         # Get part of speech and customize border color
         pos = node.get("pos", "unknown")
         details = sanitize_tooltip_text(node.get("details", ""))
         border_color = POS_BORDER_COLORS.get(pos.lower(), "#4361EE")
-
-        # Create enriched tooltip with POS and details
-        tooltip = f"{node['label']} ({lang_name}); "
-        if pos and pos != "unknown":
-            tooltip += f"Part of speech: {pos};"
-            if details:
-                tooltip += f"Details: {details};"
-
-        # Determine if this is part of a multi-sentence translation
-        sentence_group = node.get("sentence_group", "")
-        if sentence_group and sentence_group.startswith("-s"):
-            tooltip += f"Sentence: {sentence_group[2:]};"
 
         # Create simple tooltip content for the node
         tooltip = f"{node['label']} ({lang_name}); Part of speech: {pos}"
@@ -1737,357 +1222,6 @@ def adjust_color(hex_color, amount):
     return "#%02x%02x%02x" % tuple(adjusted_rgb)
 
 
-def add_cross_language_relationships(graph_data, target_langs):
-    """Add relationships between words in different languages"""
-    logger.info(
-        f"Adding cross-language relationships for {len(target_langs)} languages"
-    )
-
-    try:
-        # Group nodes by language and POS
-        nodes_by_lang_pos = {}
-
-        # Initialize for each language
-        for lang in target_langs:
-            nodes_by_lang_pos[lang] = {}
-
-        # Process all nodes
-        for node in graph_data["nodes"]:
-            # Skip related words
-            node_type = node.get("node_type", "")
-            if node_type != "primary":
-                continue
-
-            # Get language and POS
-            lang = node.get("language", "")
-            pos = node.get("pos", "unknown")
-
-            # Skip nodes with unspecified language
-            if lang not in nodes_by_lang_pos:
-                continue
-
-            # Skip nodes with unknown POS
-            if pos == "unknown":
-                continue
-
-            # Add node to the appropriate group
-            if pos not in nodes_by_lang_pos[lang]:
-                nodes_by_lang_pos[lang][pos] = []
-
-            nodes_by_lang_pos[lang][pos].append(node)
-
-        # Create connections between related words in different languages
-        processed_pairs = set()
-
-        for lang1 in target_langs:
-            for lang2 in target_langs:
-                if lang1 == lang2 or (lang1, lang2) in processed_pairs:
-                    continue
-
-                processed_pairs.add((lang1, lang2))
-
-                # For each part of speech, find potential matches
-                for pos in set(nodes_by_lang_pos[lang1].keys()) & set(
-                    nodes_by_lang_pos[lang2].keys()
-                ):
-                    for node1 in nodes_by_lang_pos[lang1][pos]:
-                        for node2 in nodes_by_lang_pos[lang2][pos]:
-                            try:
-                                # If the nodes are in same sentence group, good candidate for connection
-                                same_sentence = node1.get(
-                                    "sentence_group", ""
-                                ) == node2.get("sentence_group", "")
-
-                                # Use enhanced similarity calculation
-                                similarity_info = calculate_word_similarity(
-                                    node1["label"], node2["label"], lang1, lang2
-                                )
-
-                                # Get similarity score and relationship data
-                                if not isinstance(similarity_info, dict):
-                                    logger.warning(
-                                        "Invalid similarity_info format for cross-language comparison"
-                                    )
-                                    continue
-
-                                similarity_score = similarity_info.get("score", 0)
-                                relationship_type = similarity_info.get(
-                                    "relationship_type", "cross_language"
-                                )
-                                description = similarity_info.get(
-                                    "description", "Related words across languages"
-                                )
-
-                                # Connect nodes if semantically similar
-                                min_threshold = 0.2 if same_sentence else 0.4
-
-                                if similarity_score >= min_threshold:
-                                    # Create a tooltip with translation information
-                                    tooltip = f"{description}; {node1['label']} ({lang1}) ↔ {node2['label']} ({lang2})"
-
-                                    if same_sentence:
-                                        tooltip += "; Same sentence ✓"
-
-                                    # Add cross-language edge
-                                    graph_data["edges"].append(
-                                        {
-                                            "from": node1["id"],
-                                            "to": node2["id"],
-                                            "relation": "cross_language",
-                                            "strength": similarity_score,
-                                            "label": relationship_type.replace(
-                                                "_", " "
-                                            ),
-                                            "description": description,
-                                            "title": tooltip,
-                                            "color": "#4CC9F0",  # Blue for cross-language
-                                            "width": 2,
-                                            "dashes": True,
-                                        }
-                                    )
-                            except Exception as e:
-                                logger.error(
-                                    f"Error processing cross-language pair: {str(e)}"
-                                )
-                                continue
-    except Exception as e:
-        logger.error(f"Error in add_cross_language_relationships: {str(e)}")
-        # Don't re-raise - allow processing to continue
-
-
-def process_related_words(
-    words_data,
-    source_lang,
-    target_lang,
-    graph_data,
-    added_nodes,
-    word_relations_cache,
-    sentence_group="",
-    is_target=False,
-):
-    """
-    Process related words for a list of words and add them to the graph.
-
-    Args:
-        words_data: List of word data dictionaries with parts of speech
-        source_lang: Source language code
-        target_lang: Target language code
-        graph_data: The graph data structure to update
-        added_nodes: Set of already added node IDs to avoid duplicates
-        word_relations_cache: Cache of word relations to avoid duplicates
-        sentence_group: Optional sentence group identifier
-        is_target: Whether these are target language words
-    """
-    # Skip if no words to process
-    if not words_data:
-        return
-
-    # Get language for these words (either source or target lang)
-    lang = target_lang if is_target else source_lang
-
-    # For now, we'll use a simple predefined set of related words for common categories
-    # In a real implementation, this would be replaced with a call to a language model
-
-    # Process each word
-    for word_data in words_data:
-        # Handle string input case (from fallback tokenization)
-        if isinstance(word_data, str):
-            word = word_data
-            pos = "unknown"
-        else:
-            # Normal dictionary case
-            word = word_data["word"]
-            pos = word_data["pos"]
-
-        # Skip words that don't have a clear POS
-        if pos == "unknown":
-            continue
-
-        # Create a simple cache key
-        cache_key = f"{word}_{lang}_{pos}"
-
-        # Skip if we've already processed this word
-        if cache_key in word_relations_cache:
-            related_words = word_relations_cache[cache_key]
-        else:
-            # Generate related words (in a real implementation, this would call a language model)
-            related_words = generate_simple_related_words(word, pos, lang)
-            word_relations_cache[cache_key] = related_words
-
-        # Skip if no related words found
-        if not related_words:
-            continue
-
-        # Add related word nodes
-        word_id = f"{word}_{lang}{sentence_group}"
-
-        for related_word, relation_type in related_words:
-            # Create a unique ID for this related word
-            related_id = f"{related_word}_{lang}-related{sentence_group}"
-
-            # Skip if already added
-            if related_id in added_nodes:
-                continue
-
-            # Add node for related word
-            graph_data["nodes"].append(
-                {
-                    "id": related_id,
-                    "label": related_word,
-                    "language": lang,
-                    "pos": pos,  # Assume same POS as original word
-                    "details": relation_type,
-                    "node_type": "related",
-                    "group": f"{lang}-related{sentence_group}",
-                    "sentence_group": sentence_group,
-                }
-            )
-            added_nodes.add(related_id)
-
-            # Add edge from original word to related word
-            # Customize strength based on relation type
-            relation_strengths = {
-                "synonym": 0.9,
-                "antonym": 0.7,
-                "hypernym": 0.6,
-                "hyponym": 0.6,
-                "contextual": 0.5,
-            }
-
-            strength = relation_strengths.get(relation_type, 0.5)
-
-            graph_data["edges"].append(
-                {
-                    "from": word_id,
-                    "to": related_id,
-                    "relation": relation_type,
-                    "strength": strength,
-                    "label": relation_type,
-                }
-            )
-
-
-# Improve
-def generate_simple_related_words(word, pos, language):
-    """Generate some simple related words for common words in various languages"""
-    # This is a very simplified approach for demonstration
-    # In a real implementation, this would call a language model API
-
-    # Some common word relationships in English
-    if language == "en":
-        if word == "good":
-            return [
-                ("excellent", "synonym"),
-                ("bad", "antonym"),
-                ("quality", "hypernym"),
-                ("great", "synonym"),
-                ("rating", "contextual"),
-            ]
-        elif word == "happy":
-            return [
-                ("joyful", "synonym"),
-                ("sad", "antonym"),
-                ("emotion", "hypernym"),
-                ("ecstatic", "hyponym"),
-                ("birthday", "contextual"),
-            ]
-
-    # Some common word relationships in Spanish
-    elif language == "es":
-        if word == "bueno":
-            return [
-                ("excelente", "synonym"),
-                ("malo", "antonym"),
-                ("calidad", "hypernym"),
-                ("genial", "synonym"),
-                ("valoración", "contextual"),
-            ]
-        elif word == "feliz":
-            return [
-                ("alegre", "synonym"),
-                ("triste", "antonym"),
-                ("emoción", "hypernym"),
-                ("extático", "hyponym"),
-                ("cumpleaños", "contextual"),
-            ]
-
-    # Some common word relationships in Catalan
-    elif language == "ca":
-        if word == "bo":
-            return [
-                ("excel·lent", "synonym"),
-                ("dolent", "antonym"),
-                ("qualitat", "hypernym"),
-                ("genial", "synonym"),
-                ("valoració", "contextual"),
-            ]
-        elif word == "feliç":
-            return [
-                ("content", "synonym"),
-                ("trist", "antonym"),
-                ("emoció", "hypernym"),
-                ("extàtic", "hyponym"),
-                ("aniversari", "contextual"),
-            ]
-
-    # Default: return empty list if no predefined relations
-    return []
-
-
-def merge_language_graphs(graph_data_dict):
-    """Merge multiple language graphs into a single graph with cross-language connections"""
-    import copy
-
-    if not graph_data_dict or len(graph_data_dict) == 0:
-        return None
-
-    # Create a new graph combining all nodes and edges
-    merged_graph = {
-        "nodes": [],
-        "edges": [],
-        "metadata": {
-            "source_lang": next(iter(graph_data_dict.values()))["metadata"][
-                "source_lang"
-            ],
-            "target_langs": [],
-            "source_text": next(iter(graph_data_dict.values()))["metadata"][
-                "source_text"
-            ],
-            "translations": {},
-        },
-    }
-
-    # Track all nodes we've added to avoid duplicates
-    added_nodes = set()
-
-    # Add nodes and edges from each language graph
-    for lang, graph in graph_data_dict.items():
-        # Update metadata
-        merged_graph["metadata"]["target_langs"].append(lang)
-        if "translations" in graph["metadata"]:
-            merged_graph["metadata"]["translations"][lang] = graph["metadata"][
-                "translations"
-            ]
-
-        # Add nodes
-        for node in graph["nodes"]:
-            if node["id"] not in added_nodes:
-                merged_graph["nodes"].append(copy.deepcopy(node))
-                added_nodes.add(node["id"])
-
-        # Add edges
-        for edge in graph["edges"]:
-            merged_graph["edges"].append(copy.deepcopy(edge))
-
-    # Now add cross-language relationships
-    target_langs = merged_graph["metadata"]["target_langs"]
-    if len(target_langs) > 1:
-        add_cross_language_relationships(merged_graph, target_langs)
-
-    logger.info(f"Merged {len(graph_data_dict)} language graphs into a single graph")
-    return merged_graph
-
-
 def visualize_cooccurrence_network(graph, lang_code=None):
     """
     Visualize a word co-occurrence network using Pyvis.
@@ -2108,35 +1242,9 @@ def visualize_cooccurrence_network(graph, lang_code=None):
         # Set options for visualization
         net.barnes_hut()
         net.set_options(
-            """
-        {
-          "nodes": {
-            "borderWidth": 2,
-            "borderWidthSelected": 4,
-            "color": {
-              "border": "#4361EE",
-              "background": "#4CC9F0"
-            },
-            "font": {
-              "size": 16,
-              "face": "Arial",
-              "color": "#FAFAFA"
-            },
-            "shadow": true
-          },
-          "edges": {
-            "color": {
-              "color": "#AAAAAA",
-              "highlight": "#F72585",
-              "hover": "#F72585"
-            },
-            "smooth": {
-              "enabled": true,
-              "type": "dynamic"
-            },
-            "shadow": false,
-            "width": 2
-          },
+            "{"
+            + _PYVIS_SHARED_NODE_EDGE_OPTIONS
+            + """,
           "physics": {
             "barnesHut": {
               "gravitationalConstant": -5000,
@@ -2254,8 +1362,6 @@ def show_language_graphs_help():
     docs_path = "docs/"
 
     # Find all markdown files recursively
-    import os
-
     md_files = []
 
     try:
@@ -2273,11 +1379,10 @@ def show_language_graphs_help():
             # Create a dropdown to select between multiple files if there are more than one
             if len(md_files) > 1:
                 file_names = [os.path.basename(f).replace(".md", "") for f in md_files]
-                doc_format_func = create_documentation_format_func(file_names)
                 selected_index = st.selectbox(
                     "Select documentation:",
                     range(len(file_names)),
-                    format_func=doc_format_func,
+                    format_func=lambda i: format_documentation_file(i, file_names),
                 )
                 selected_file = md_files[selected_index]
             else:
@@ -2349,81 +1454,6 @@ def get_fallback_help_content():
     """
 
 
-def display_nlp_legend():
-    """Display a legend explaining NLP terminology and color coding used in the graph."""
-
-    # Use the same colors as in the visualization
-    # POS color accents imported from central config
-
-    # Create expandable section for the legend
-    with st.expander(
-        "📖 **NLP Graph Legend - Understanding the Visualization**", expanded=False
-    ):
-        st.markdown(
-            """
-        ### Node Colors and Types
-
-        Nodes in the graph represent words, and their colors indicate the language and part of speech.
-        The border color of a node indicates its part of speech (POS):
-        """
-        )
-
-        # Part of speech explanations with colored borders to match the graph
-        col1, col2 = st.columns(2)
-
-        with col1:
-            st.markdown(
-                f"""
-            - <span style="border: 2px solid {POS_BORDER_COLORS['noun']}; padding: 2px 5px; border-radius: 4px;">NOUN/PROPN</span>: Nouns (person, place, thing) and proper nouns (names, locations)
-            - <span style="border: 2px solid {POS_BORDER_COLORS['verb']}; padding: 2px 5px; border-radius: 4px;">VERB</span>: Action words or states of being
-            - <span style="border: 2px solid {POS_BORDER_COLORS['adjective']}; padding: 2px 5px; border-radius: 4px;">ADJ</span>: Words that describe nouns
-            - <span style="border: 2px solid {POS_BORDER_COLORS['adverb']}; padding: 2px 5px; border-radius: 4px;">ADV</span>: Words that modify verbs, adjectives, or other adverbs
-            """,
-                unsafe_allow_html=True,
-            )
-
-        with col2:
-            st.markdown(
-                f"""
-            - <span style="border: 2px solid {POS_BORDER_COLORS['pronoun']}; padding: 2px 5px; border-radius: 4px;">PRON</span>: Words that substitute for nouns (I, you, he, she)
-            - <span style="border: 2px solid {POS_BORDER_COLORS['determiner']}; padding: 2px 5px; border-radius: 4px;">DET</span>: Articles and determiners (the, a, this, that)
-            - <span style="border: 2px solid {POS_BORDER_COLORS['preposition']}; padding: 2px 5px; border-radius: 4px;">ADP</span>: Prepositions (in, on, at, by)
-            - <span style="border: 2px solid {POS_BORDER_COLORS['conjunction']}; padding: 2px 5px; border-radius: 4px;">CONJ</span>: Words that connect phrases or clauses
-            """,
-                unsafe_allow_html=True,
-            )
-
-        st.markdown(
-            """
-        ### Dependency Relations
-
-        The tooltip shows dependency relations between words:
-
-        - **ROOT**: The main word in a sentence, usually the main verb
-        - **nsubj**: Nominal subject - the subject of a clause
-        - **dobj/obj**: Direct object - the object directly affected by the verb
-        - **amod**: Adjectival modifier - an adjective that modifies a noun
-        - **det**: Determiner - an article or determiner that modifies a noun
-
-        ### Entity Types
-
-        Some words are recognized as named entities, which are specific real-world objects:
-
-        - **PERSON**: Names of people
-        - **LOC/GPE**: Locations or geopolitical entities (countries, cities)
-        - **ORG**: Organizations, companies, institutions
-        - **MISC**: Miscellaneous entities, including nationalities, languages
-        - **DATE/TIME**: Calendar and time references
-
-        ### Edge Types and Strength
-
-        - Edges show relationships between words
-        - Thicker edges indicate stronger relationships
-        - Dashed edges indicate cross-language or cross-sentence connections
-        """
-        )
-
-
 def handle_translation_error(
     error_message: str, source_lang: str, target_lang: str
 ) -> str:
@@ -2442,24 +1472,21 @@ def handle_translation_error(
     if "Error code:" in error_message:
         try:
             # Parse the error structure
-            if "model_not_found" in error_message:
+            if "model_not_found" in error_message or "404" in error_message:
                 return "⚠️ Model not available. Please select a different model from the sidebar."
             elif "invalid_api_key" in error_message:
                 return "⚠️ Invalid API key. Please check your OpenAI API key in the sidebar."
-            elif "insufficient_quota" in error_message:
+            elif (
+                "insufficient_quota" in error_message
+                or "quota_exceeded" in error_message
+            ):
                 return "⚠️ API quota exceeded. Please check your OpenAI billing and usage limits."
-            elif "quota_exceeded" in error_message:
-                return "⚠️ API quota exceeded. Please check your OpenAI billing and usage limits."
-            elif "rate_limit" in error_message:
-                return "⚠️ Rate limit exceeded. Please wait a moment and try again."
-            elif "429" in error_message:
+            elif "rate_limit" in error_message or "429" in error_message:
                 return "⚠️ Rate limit exceeded. Please wait a moment and try again."
             elif "401" in error_message:
                 return "⚠️ Authentication failed. Please check your OpenAI API key."
             elif "403" in error_message:
                 return "⚠️ Access denied. Please check your OpenAI account permissions."
-            elif "404" in error_message:
-                return "⚠️ Model not available. Please select a different model from the sidebar."
             else:
                 return "⚠️ API error occurred. Please try again or check your OpenAI account."
         except Exception:
@@ -2755,10 +1782,6 @@ _GRAPH_OPTIONS = """{
 
 def _display_word_knowledge_graph(word: str, language: str, analysis_data: dict):
     """Create and display an interactive knowledge graph for the word analysis."""
-    from pyvis.network import Network
-    import tempfile
-    import os
-
     net = Network(height="450px", width="100%", bgcolor="#0E1117", font_color="#FAFAFA")
     net.barnes_hut()
     net.set_options(_GRAPH_OPTIONS)
@@ -2906,10 +1929,7 @@ def _display_verb_analysis(d: dict):
         _show_entries(d, "conjugations", "Key Conjugations")
     with col2:
         _show_entries(d, "related_forms", "Related Forms")
-        if "synonyms" in d:
-            st.markdown("**Synonyms:**")
-            for s in _format_entries(d, "synonyms"):
-                st.markdown(f"- {s}")
+        _show_entries(d, "synonyms", "Synonyms")
     _show_examples(d)
     if "grammar_notes" in d:
         st.info(f"**Grammar Notes:** {d['grammar_notes']}")
@@ -2926,10 +1946,7 @@ def _display_noun_analysis(d: dict):
         _show_entries(d, "articles", "Articles")
     with col2:
         _show_entries(d, "related_forms", "Related Forms")
-        if "synonyms" in d:
-            st.markdown("**Synonyms:**")
-            for s in _format_entries(d, "synonyms"):
-                st.markdown(f"- {s}")
+        _show_entries(d, "synonyms", "Synonyms")
     _show_examples(d)
     if "cultural_notes" in d:
         st.info(f"**Cultural Notes:** {d['cultural_notes']}")
@@ -2942,14 +1959,8 @@ def _display_adjective_analysis(d: dict):
         _show_entries(d, "gender_forms", "Gender Forms")
         _show_entries(d, "comparison", "Comparison Forms")
     with col2:
-        if "synonyms" in d:
-            st.markdown("**Synonyms:**")
-            for s in _format_entries(d, "synonyms"):
-                st.markdown(f"- {s}")
-        if "antonyms" in d:
-            st.markdown("**Antonyms:**")
-            for a in _format_entries(d, "antonyms"):
-                st.markdown(f"- {a}")
+        _show_entries(d, "synonyms", "Synonyms")
+        _show_entries(d, "antonyms", "Antonyms")
     _show_examples(d)
     if "position" in d:
         st.info(f"**Position Rule:** {d['position']}")
@@ -2988,90 +1999,15 @@ async def analyze_selected_word(word: str, language: str, client):
         return {"error": f"Analysis failed: {str(e)}"}
 
 
-def main():
-    # Initialize session state for help page if not exists
-    if "show_help_page" not in st.session_state:
-        st.session_state["show_help_page"] = False
+def _report_error(action: str, e: Exception) -> None:
+    """Show and log an error for a failed sidebar action, e.g. "loading graph history"."""
+    st.error(f"Error {action}: {e}")
+    logger.error(f"Error {action}: {e}")
 
-    # Check if we should show the help page
-    if st.session_state["show_help_page"]:
-        show_language_graphs_help()
-        return  # Exit the main function early
 
-    # Create a header with visual distinction for dark theme
-    st.title("Language Graph - Translation Helper")
-    st.markdown(
-        """
-    Translate text between languages and visualize word relationships in an interactive graph.
-    """
-    )
-
-    # Initialize session state FIRST
-    if "llm_provider" not in st.session_state:
-        st.session_state["llm_provider"] = settings.llm_provider.value
-    if "model_name" not in st.session_state:
-        st.session_state["model_name"] = settings.current_model
-    if "translations" not in st.session_state:
-        st.session_state["translations"] = {}
-    if "graph_data" not in st.session_state:
-        st.session_state["graph_data"] = None
-    if "cooccurrence_graphs" not in st.session_state:
-        st.session_state["cooccurrence_graphs"] = {}
-    if "chat_history" not in st.session_state:
-        st.session_state["chat_history"] = []
-    if "show_debug" not in st.session_state:
-        st.session_state["show_debug"] = False
-    if "audio_cache" not in st.session_state:
-        st.session_state["audio_cache"] = {}
-    if "current_view" not in st.session_state:
-        st.session_state["current_view"] = "semantic"
-    if "openai_organization" not in st.session_state:
-        st.session_state["openai_organization"] = settings.openai_organization
-    if "current_word_analysis" not in st.session_state:
-        st.session_state["current_word_analysis"] = None
-    if "current_word" not in st.session_state:
-        st.session_state["current_word"] = None
-    if "current_word_lang" not in st.session_state:
-        st.session_state["current_word_lang"] = None
-    if "help_dismissed" not in st.session_state:
-        st.session_state["help_dismissed"] = False
-
-    # Initialize graph storage
-    if "graph_storage" not in st.session_state:
-        st.session_state.graph_storage = get_graph_storage()
-
-    # Now get LLM provider and model from properly initialized session state
-    llm_provider = st.session_state["llm_provider"]
-    model_name = st.session_state["model_name"]
-
-    # Use the cached LLM client, rebuilding it only when the provider, the model or
-    # the credentials changed. get_llm_client() already implements exactly this, so
-    # the caching lives in one place rather than being repeated at each call site.
-    if st.session_state.pop("needs_client_reinit", False):
-        st.session_state["llm_client"] = None
-
-    previous = st.session_state.get("llm_client")
-    client = get_llm_client()
-
-    if client is not previous:
-        # Force the status line to re-check against the new client.
-        for key in ("model_status_displayed_once", "last_model_available"):
-            st.session_state.pop(key, None)
-        logger.info(f"Created new LLM client for {llm_provider}:{model_name}")
-
-    if client is None:
-        st.error(
-            "⚠️ Could not initialise an LLM client. Check the provider settings in the sidebar."
-        )
-        st.session_state["model_available"] = False
-        return
-
-    # Display model status and check if it's available (with caching)
-    model_available = display_model_status(client)
-
-    # Update model availability in session state
-    st.session_state["model_available"] = model_available
-
+def _render_sidebar() -> tuple[str, list[str]]:
+    """Render the sidebar (language/LLM/graph settings) and return the source
+    language and target languages the user selected."""
     # Add a sidebar with translation settings
     with st.sidebar:
         st.header("Translation Settings")
@@ -3120,10 +2056,10 @@ def main():
         source_lang = st.selectbox(
             "Source Language",
             settings.supported_languages_list,
-            index=get_language_index(
+            index=get_index(
                 settings.supported_languages_list, settings.default_source_language
             ),
-            format_func=format_language_option,
+            format_func=get_language_display,
             help="Select the source language",
         )
 
@@ -3132,7 +2068,7 @@ def main():
             "Target Languages",
             settings.supported_languages_list,
             default=settings.default_target_languages_list,
-            format_func=format_language_option,
+            format_func=get_language_display,
             help="Select one or more target languages",
         )
 
@@ -3157,8 +2093,8 @@ def main():
         with st.expander("⚙️ LLM Settings", expanded=False):
             # LLM Provider selection
             st.subheader("LLM Provider")
-            provider_options = ["ollama", "openai", "anthropic"]
-            provider_index = get_provider_index(
+            provider_options = [p.value for p in LLMProvider]
+            provider_index = get_index(
                 provider_options, st.session_state["llm_provider"]
             )
             selected_provider = st.selectbox(
@@ -3187,14 +2123,10 @@ def main():
                     and st.session_state["llm_provider"] == "ollama"
                 )
                 model_label = build_model_label("Ollama Model", is_ollama_available)
-                model_index = get_model_index(
+                model_index = get_index(
                     available_models, st.session_state["model_name"]
                 )
-                is_disabled = not is_model_enabled(
-                    "ollama",
-                    st.session_state["llm_provider"],
-                    st.session_state["model_available"],
-                )
+                is_disabled = not is_ollama_available
 
                 model_name = st.selectbox(
                     model_label,
@@ -3206,24 +2138,15 @@ def main():
 
             elif selected_provider == "openai":
                 openai_models = cached_openai_models(
-                    st.session_state.get("openai_api_key", settings.openai_api_key),
-                    st.session_state.get(
-                        "openai_organization", settings.openai_organization
-                    ),
+                    *get_provider_credentials("openai")
                 )
                 is_openai_available = (
                     st.session_state["model_available"]
                     and st.session_state["llm_provider"] == "openai"
                 )
                 model_label = build_model_label("OpenAI Model", is_openai_available)
-                model_index = get_model_index(
-                    openai_models, st.session_state["model_name"]
-                )
-                is_disabled = not is_model_enabled(
-                    "openai",
-                    st.session_state["llm_provider"],
-                    st.session_state["model_available"],
-                )
+                model_index = get_index(openai_models, st.session_state["model_name"])
+                is_disabled = not is_openai_available
 
                 model_name = st.selectbox(
                     model_label,
@@ -3273,24 +2196,17 @@ def main():
                         )
 
             elif selected_provider == "anthropic":
-                anthropic_models = cached_anthropic_models(
-                    st.session_state.get(
-                        "anthropic_api_key", settings.anthropic_api_key
-                    )
-                )
+                anthropic_api_key, _ = get_provider_credentials("anthropic")
+                anthropic_models = cached_anthropic_models(anthropic_api_key)
                 is_anthropic_available = (
                     st.session_state["model_available"]
                     and st.session_state["llm_provider"] == "anthropic"
                 )
                 model_label = build_model_label("Claude Model", is_anthropic_available)
-                model_index = get_model_index(
+                model_index = get_index(
                     anthropic_models, st.session_state["model_name"]
                 )
-                is_disabled = not is_model_enabled(
-                    "anthropic",
-                    st.session_state["llm_provider"],
-                    st.session_state["model_available"],
-                )
+                is_disabled = not is_anthropic_available
 
                 model_name = st.selectbox(
                     model_label,
@@ -3345,56 +2261,55 @@ def main():
         with st.expander("📊 Graph Options", expanded=False):
             # Switch for visualization type
             st.subheader("Visualization Settings")
-        view_options = ["Semantic Graph", "Co-occurrence Network"]
-        selected_view = st.radio("Analysis View", view_options)
+            view_options = ["Semantic Graph", "Co-occurrence Network"]
+            selected_view = st.radio("Analysis View", view_options)
 
-        # Map selection to internal state
-        st.session_state["current_view"] = (
-            "semantic" if selected_view == "Semantic Graph" else "cooccurrence"
-        )
-
-        # Co-occurrence settings (only shown when that view is selected)
-        if st.session_state["current_view"] == "cooccurrence":
-            st.subheader("Co-occurrence Settings")
-
-            # Window size for co-occurrence
-            window_size = st.slider(
-                "Window Size",
-                min_value=1,
-                max_value=5,
-                value=settings.default_window_size,
-                help="Number of words to consider for co-occurrence (larger = more connections)",
+            # Map selection to internal state
+            st.session_state["current_view"] = (
+                "semantic" if selected_view == "Semantic Graph" else "cooccurrence"
             )
-            st.session_state["window_size"] = window_size
 
-            # Minimum frequency for words
-            min_freq = st.slider(
-                "Minimum Word Frequency",
-                min_value=1,
-                max_value=5,
-                value=settings.default_min_frequency,
-                help="Minimum times a word must appear to be included",
-            )
-            st.session_state["min_freq"] = min_freq
+            # Co-occurrence settings (only shown when that view is selected)
+            if st.session_state["current_view"] == "cooccurrence":
+                st.subheader("Co-occurrence Settings")
 
-            # POS tag selection
-            pos_options = [
-                ("Nouns", "NOUN"),
-                ("Verbs", "VERB"),
-                ("Adjectives", "ADJ"),
-                ("Adverbs", "ADV"),
-                ("Proper Nouns", "PROPN"),
-            ]
-            pos_tag_options = [tag for _, tag in pos_options]
-            pos_format_func = create_pos_format_func(pos_options)
-            selected_pos = st.multiselect(
-                "Part of Speech Filter",
-                options=pos_tag_options,
-                default=settings.default_pos_filter_list,
-                format_func=pos_format_func,
-                help="Filter words by part of speech",
-            )
-            st.session_state["selected_pos"] = selected_pos
+                # Window size for co-occurrence
+                window_size = st.slider(
+                    "Window Size",
+                    min_value=1,
+                    max_value=5,
+                    value=settings.default_window_size,
+                    help="Number of words to consider for co-occurrence (larger = more connections)",
+                )
+                st.session_state["window_size"] = window_size
+
+                # Minimum frequency for words
+                min_freq = st.slider(
+                    "Minimum Word Frequency",
+                    min_value=1,
+                    max_value=5,
+                    value=settings.default_min_frequency,
+                    help="Minimum times a word must appear to be included",
+                )
+                st.session_state["min_freq"] = min_freq
+
+                # POS tag selection
+                pos_options = [
+                    ("Nouns", "NOUN"),
+                    ("Verbs", "VERB"),
+                    ("Adjectives", "ADJ"),
+                    ("Adverbs", "ADV"),
+                    ("Proper Nouns", "PROPN"),
+                ]
+                pos_tag_options = [tag for _, tag in pos_options]
+                selected_pos = st.multiselect(
+                    "Part of Speech Filter",
+                    options=pos_tag_options,
+                    default=settings.default_pos_filter_list,
+                    format_func=lambda tag: format_pos_option(tag, pos_options),
+                    help="Filter words by part of speech",
+                )
+                st.session_state["selected_pos"] = selected_pos
 
         # Graph History Section - Move to collapsible expander
         with st.expander("📈 Graph History", expanded=False):
@@ -3447,8 +2362,7 @@ def main():
                         "No graphs saved yet. Generate your first graph to see it here!"
                     )
             except Exception as e:
-                st.error(f"Error loading graph history: {e}")
-                logger.error(f"Error loading graph history: {e}")
+                _report_error("loading graph history", e)
 
             # Add search functionality
             st.subheader("🔍 Search Graphs")
@@ -3472,8 +2386,7 @@ def main():
                     else:
                         st.info("No matching graphs found.")
                 except Exception as e:
-                    st.error(f"Error searching graphs: {e}")
-                    logger.error(f"Error searching graphs: {e}")
+                    _report_error("searching graphs", e)
 
             # Show storage statistics
             st.subheader("📊 Storage Info")
@@ -3483,18 +2396,27 @@ def main():
                 st.write(f"**Total Nodes:** {stats['total_nodes']}")
                 st.write(f"**Storage Size:** {stats['storage_size_mb']} MB")
             except Exception as e:
-                st.error(f"Error loading storage stats: {e}")
-                logger.error(f"Error loading storage stats: {e}")
+                _report_error("loading storage stats", e)
 
             if st.button("🗑️ Clear All Data", key="clear_all_graphs"):
-                if st.confirm("Are you sure you want to delete all saved graphs?"):
-                    try:
-                        if st.session_state.graph_storage.clear_all_data():
-                            st.success("All data cleared!")
-                            st.rerun()
-                    except Exception as e:
-                        st.error(f"Error clearing data: {e}")
-                        logger.error(f"Error clearing data: {e}")
+                st.session_state["confirm_clear_all_graphs"] = True
+
+            if st.session_state.get("confirm_clear_all_graphs"):
+                st.warning("Delete all saved graphs? This cannot be undone.")
+                confirm_col, cancel_col = st.columns(2)
+                with confirm_col:
+                    if st.button("Yes, delete", key="confirm_clear_all_graphs_yes"):
+                        st.session_state["confirm_clear_all_graphs"] = False
+                        try:
+                            if st.session_state.graph_storage.clear_all_data():
+                                st.success("All data cleared!")
+                                st.rerun()
+                        except Exception as e:
+                            _report_error("clearing data", e)
+                with cancel_col:
+                    if st.button("Cancel", key="confirm_clear_all_graphs_cancel"):
+                        st.session_state["confirm_clear_all_graphs"] = False
+                        st.rerun()
 
         # Debug toggle - Move to collapsible expander
         with st.expander("🐛 Debug", expanded=False):
@@ -3504,6 +2426,11 @@ def main():
                 help="Show detailed logs of translation processing",
             )
 
+    return source_lang, target_langs
+
+
+def _render_debug_and_help_sections() -> None:
+    """Render the collapsible debug-log panel and the dismissible how-to guide."""
     # Show debug logs if enabled
     if st.session_state["show_debug"]:
         with st.expander("Debug Logs", expanded=True):
@@ -3536,6 +2463,14 @@ def main():
                 st.session_state["help_dismissed"] = True
                 st.rerun()
 
+
+def _render_translation_panel(
+    source_lang: str, target_langs: list[str]
+) -> tuple[str, bool]:
+    """Render the translation input/output panel and chat-history sidebar.
+
+    Returns the entered source text and whether the translate button was pressed.
+    """
     # Translation input/output section - side by side (50/50)
     st.subheader("💬 Translation")
 
@@ -3574,7 +2509,6 @@ def main():
             clear_button = st.button("🗑️ Clear History", use_container_width=True)
             if clear_button:
                 st.session_state["chat_history"] = []
-                st.session_state["translations"] = {}
                 st.session_state["graph_data"] = None
                 st.session_state["cooccurrence_graphs"] = {}
                 st.success("History cleared!")
@@ -3686,36 +2620,6 @@ def main():
     # Right sidebar for chat history (collapsible via expander)
     with chat_sidebar_col:
         with st.expander("💬 Chat History", expanded=False):
-            # Create custom CSS for styling the chat
-            st.markdown(
-                """
-            <style>
-            .chat-message-user, .chat-message-ai {
-                margin-bottom: 15px;
-                padding: 10px;
-                border-radius: 5px;
-                font-size: 0.9em;
-            }
-            .chat-message-user {
-                background-color: rgba(67, 97, 238, 0.1);
-                border-left: 3px solid #4361EE;
-            }
-            .chat-message-ai {
-                background-color: rgba(76, 201, 240, 0.1);
-                border-left: 3px solid #4CC9F0;
-            }
-            audio::-webkit-media-controls-panel {
-                background-color: #333333;
-            }
-            audio::-webkit-media-controls-play-button {
-                background-color: #4361EE;
-                border-radius: 50%;
-            }
-            </style>
-            """,
-                unsafe_allow_html=True,
-            )
-
             # Create a scrollable chat container
             chat_container = st.container(height=600)
 
@@ -3751,15 +2655,14 @@ def main():
                                     if match_result:
                                         target_text = match_result.group(1).strip()
 
-                                        match target_text:
-                                            case text if "Spanish" in text:
-                                                message_target_lang = "es"
-                                            case text if "English" in text:
-                                                message_target_lang = "en"
-                                            case text if "Catalan" in text:
-                                                message_target_lang = "ca"
-                                            case _:
-                                                message_target_lang = None
+                                        message_target_lang = None
+                                        for (
+                                            lang_code,
+                                            lang_info,
+                                        ) in LANGUAGE_MAP.items():
+                                            if lang_info["name"] in target_text:
+                                                message_target_lang = lang_code
+                                                break
 
                         render_chat_message(
                             message["content"],
@@ -3768,6 +2671,12 @@ def main():
                             source_lang,
                         )
 
+    return source_text, translate_button
+
+
+def _render_graph_visualization_tabs() -> None:
+    """Render the Semantic Graph / Co-occurrence Network tabs, including the
+    word-selection and word-analysis UI nested inside the semantic graph tab."""
     # Graph visualization section - moved to tabs
     if st.session_state["graph_data"] or st.session_state.get("cooccurrence_graphs"):
         # Create tabs for different views
@@ -3797,73 +2706,73 @@ def main():
                     # Create columns for options
                     opt_col1, opt_col2 = st.columns([1, 1])
 
-                with opt_col1:
-                    # Option to merge all graphs into one comprehensive view
-                    merge_graphs = st.checkbox(
-                        "Merge all language graphs",
-                        value=True,
-                        help="Show connections between different languages",
+                    with opt_col1:
+                        # Option to merge all graphs into one comprehensive view
+                        merge_graphs = st.checkbox(
+                            "Merge all language graphs",
+                            value=True,
+                            help="Show connections between different languages",
+                        )
+
+                    with opt_col2:
+                        # Filter for minimum relationship strength
+                        min_strength = st.slider(
+                            "Minimum relationship strength",
+                            min_value=0.0,
+                            max_value=1.0,
+                            value=0.5,
+                            step=0.1,
+                            help="Only show strong relationships above this threshold",
+                        )
+
+                # Display the graph based on selection
+
+                if merge_graphs and len(available_langs) > 1:
+                    # Create a merged graph with cross-language connections
+                    merged_graph = merge_language_graphs(st.session_state["graph_data"])
+
+                    # Filter edges by strength
+                    if min_strength > 0:
+                        filtered_edges = [
+                            edge
+                            for edge in merged_graph["edges"]
+                            if edge.get("strength", 1.0) >= min_strength
+                        ]
+                        merged_graph["edges"] = filtered_edges
+
+                    st.markdown(
+                        f"**Combined graph showing relationships between {', '.join(available_langs)}**"
+                    )
+                    visualize_translation_graph(merged_graph)
+                elif available_langs:
+                    # Let user choose which language graph to show
+                    selected_lang = st.selectbox(
+                        "Select language graph",
+                        options=available_langs,
+                        format_func=get_language_display,
                     )
 
-                with opt_col2:
-                    # Filter for minimum relationship strength
-                    min_strength = st.slider(
-                        "Minimum relationship strength",
-                        min_value=0.0,
-                        max_value=1.0,
-                        value=0.5,
-                        step=0.1,
-                        help="Only show strong relationships above this threshold",
+                    # Filter edges by strength if needed
+                    graph_data = st.session_state["graph_data"][selected_lang]
+                    if min_strength > 0:
+                        filtered_edges = [
+                            edge
+                            for edge in graph_data["edges"]
+                            if edge.get("strength", 1.0) >= min_strength
+                        ]
+                        # Create a copy of the graph with filtered edges
+                        filtered_graph = {
+                            "nodes": graph_data["nodes"],
+                            "edges": filtered_edges,
+                            "metadata": graph_data.get("metadata", {}),
+                        }
+                        graph_data = filtered_graph
+
+                    # Display the selected graph
+                    st.markdown(
+                        f"**Semantic network for {get_language_display(selected_lang)}**"
                     )
-
-            # Display the graph based on selection
-
-            if merge_graphs and len(available_langs) > 1:
-                # Create a merged graph with cross-language connections
-                merged_graph = merge_language_graphs(st.session_state["graph_data"])
-
-                # Filter edges by strength
-                if min_strength > 0:
-                    filtered_edges = [
-                        edge
-                        for edge in merged_graph["edges"]
-                        if edge.get("strength", 1.0) >= min_strength
-                    ]
-                    merged_graph["edges"] = filtered_edges
-
-                st.markdown(
-                    f"**Combined graph showing relationships between {', '.join(available_langs)}**"
-                )
-                visualize_translation_graph(merged_graph)
-            elif available_langs:
-                # Let user choose which language graph to show
-                selected_lang = st.selectbox(
-                    "Select language graph",
-                    options=available_langs,
-                    format_func=format_language_option,
-                )
-
-                # Filter edges by strength if needed
-                graph_data = st.session_state["graph_data"][selected_lang]
-                if min_strength > 0:
-                    filtered_edges = [
-                        edge
-                        for edge in graph_data["edges"]
-                        if edge.get("strength", 1.0) >= min_strength
-                    ]
-                    # Create a copy of the graph with filtered edges
-                    filtered_graph = {
-                        "nodes": graph_data["nodes"],
-                        "edges": filtered_edges,
-                        "metadata": graph_data.get("metadata", {}),
-                    }
-                    graph_data = filtered_graph
-
-                # Display the selected graph
-                st.markdown(
-                    f"**Semantic network for {get_language_display(selected_lang)}**"
-                )
-                visualize_translation_graph(graph_data)
+                    visualize_translation_graph(graph_data)
 
             # Add a legend explaining the graph
             with st.expander("📊 Graph Legend", expanded=False):
@@ -4045,7 +2954,7 @@ def main():
                     selected_lang = st.selectbox(
                         "Select language",
                         options=available_langs,
-                        format_func=format_language_option,
+                        format_func=get_language_display,
                     )
 
                 # Show information about this analysis
@@ -4110,6 +3019,12 @@ def main():
                     "No co-occurrence data available yet. Translate some text to generate graphs."
                 )
 
+
+def _handle_translate_button(
+    translate_button: bool, source_text: str, source_lang: str, target_langs: list[str]
+) -> None:
+    """Run the translation + graph-generation pipeline when the translate button
+    was pressed, and store the results (or errors) into session state."""
     # Handle translation
     if translate_button and source_text and st.session_state["model_available"]:
         # Add user input to chat history
@@ -4307,13 +3222,6 @@ def main():
                     )
                     return
 
-                # Store successful translations in session state
-                st.session_state["translations"][source_text] = {
-                    "source_lang": source_lang,
-                    "target_langs": list(successful_translations.keys()),
-                    "translations": successful_translations,
-                }
-
                 # Store all graph data
                 st.session_state["graph_data"] = all_graph_data
 
@@ -4360,6 +3268,90 @@ def main():
 
             # Refresh the UI
             st.rerun()
+
+
+def main():
+    # Initialize session state for help page if not exists
+    if "show_help_page" not in st.session_state:
+        st.session_state["show_help_page"] = False
+
+    # Check if we should show the help page
+    if st.session_state["show_help_page"]:
+        show_language_graphs_help()
+        return  # Exit the main function early
+
+    # Create a header with visual distinction for dark theme
+    st.title("Language Graph - Translation Helper")
+    st.markdown(
+        """
+    Translate text between languages and visualize word relationships in an interactive graph.
+    """
+    )
+
+    # Initialize session state FIRST
+    default_session_state = {
+        "llm_provider": settings.llm_provider.value,
+        "model_name": settings.current_model,
+        "graph_data": None,
+        "cooccurrence_graphs": {},
+        "chat_history": [],
+        "show_debug": False,
+        "audio_cache": {},
+        "current_view": "semantic",
+        "openai_organization": settings.openai_organization,
+        "current_word_analysis": None,
+        "current_word": None,
+        "current_word_lang": None,
+        "help_dismissed": False,
+    }
+    for key, value in default_session_state.items():
+        st.session_state.setdefault(key, value)
+
+    # Initialize graph storage
+    if "graph_storage" not in st.session_state:
+        st.session_state.graph_storage = get_graph_storage()
+
+    # Now get LLM provider and model from properly initialized session state
+    llm_provider = st.session_state["llm_provider"]
+    model_name = st.session_state["model_name"]
+
+    # Use the cached LLM client, rebuilding it only when the provider, the model or
+    # the credentials changed. get_llm_client() already implements exactly this, so
+    # the caching lives in one place rather than being repeated at each call site.
+    if st.session_state.pop("needs_client_reinit", False):
+        st.session_state["llm_client"] = None
+
+    previous = st.session_state.get("llm_client")
+    client = get_llm_client()
+
+    if client is not previous:
+        # Force the status line to re-check against the new client.
+        for key in ("model_status_displayed_once", "last_model_available"):
+            st.session_state.pop(key, None)
+        logger.info(f"Created new LLM client for {llm_provider}:{model_name}")
+
+    if client is None:
+        st.error(
+            "⚠️ Could not initialise an LLM client. Check the provider settings in the sidebar."
+        )
+        st.session_state["model_available"] = False
+        return
+
+    # Display model status and check if it's available (with caching)
+    model_available = display_model_status(client)
+
+    # Update model availability in session state
+    st.session_state["model_available"] = model_available
+
+    source_lang, target_langs = _render_sidebar()
+
+    _render_debug_and_help_sections()
+
+    source_text, translate_button = _render_translation_panel(source_lang, target_langs)
+
+    _render_graph_visualization_tabs()
+
+    _handle_translate_button(translate_button, source_text, source_lang, target_langs)
 
 
 if __name__ == "__main__":

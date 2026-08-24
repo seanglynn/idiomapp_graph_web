@@ -9,3 +9,4 @@ ollama-models/**
 .vscode/settings.json
 .prompts/*
 graph_storage/*
+word_analysis_cache/*

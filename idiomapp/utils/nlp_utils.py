@@ -20,6 +20,7 @@ from pydantic import ValidationError
 
 from idiomapp.config import GROUP_COLORS as LANGUAGE_COLORS, LANG_MODELS
 from idiomapp.utils.schemas import WordAnalysis, WORD_ANALYSIS_GROUPS, prompt_example
+from idiomapp.utils.analysis_cache import get_word_analysis_cache
 
 # Setup logging
 logger = logging.getLogger(__name__)
@@ -865,6 +866,626 @@ def _calculate_fallback_similarity(
     }
 
 
+def _word_pos_details(word_data: dict) -> tuple:
+    """
+    Extract (word, pos, details) from a POS-tagged word dict.
+
+    `analyze_parts_of_speech()` always returns dicts - including its own
+    exception-fallback path, which still builds `{"word": ..., "pos": "unknown",
+    ...}` rather than a bare string - so no other input shape reaches this.
+    """
+    return word_data["word"], word_data["pos"], word_data.get("details", "")
+
+
+def _add_word_nodes(word_pos_list, lang, sentence_group, graph_data, added_nodes):
+    """Add a graph node for each word in a POS-tagged word list, skipping duplicates."""
+    for word_data in word_pos_list:
+        word, pos, details = _word_pos_details(word_data)
+
+        node_id = f"{word}_{lang}{sentence_group}"
+        if node_id in added_nodes:
+            continue
+
+        graph_data["nodes"].append(
+            {
+                "id": node_id,
+                "label": word,
+                "language": lang,
+                "pos": pos,
+                "details": details,
+                "node_type": "primary",
+                "group": f"{lang}{sentence_group}",
+                "sentence_group": sentence_group,
+            }
+        )
+        added_nodes.add(node_id)
+
+
+def process_sentence_pair(
+    source_sentence,
+    target_sentence,
+    source_lang,
+    target_lang,
+    graph_data,
+    added_nodes,
+    word_relations_cache,
+    sentence_group="",
+):
+    """Process a pair of sentences in different languages and add them to the graph"""
+
+    logger.info(f"Processing sentence pair: {source_lang} to {target_lang}")
+
+    try:
+        # Analyze parts of speech for source and target sentence
+        source_pos = analyze_parts_of_speech(source_sentence, source_lang)
+        target_pos = analyze_parts_of_speech(target_sentence, target_lang)
+
+        _add_word_nodes(
+            source_pos, source_lang, sentence_group, graph_data, added_nodes
+        )
+        _add_word_nodes(
+            target_pos, target_lang, sentence_group, graph_data, added_nodes
+        )
+
+        # Add edges between source and target words based on alignment
+        for source_word_data in source_pos:
+            source_word, source_pos_val, _ = _word_pos_details(source_word_data)
+            source_id = f"{source_word}_{source_lang}{sentence_group}"
+
+            # For each target word, establish a direct translation edge if appropriate
+            for target_word_data in target_pos:
+                target_word, target_pos_val, _ = _word_pos_details(target_word_data)
+                target_id = f"{target_word}_{target_lang}{sentence_group}"
+
+                try:
+                    # Use enhanced word similarity analysis - always returns a dict,
+                    # including its own error-fallback paths.
+                    similarity_info = calculate_word_similarity(
+                        source_word, target_word, source_lang, target_lang
+                    )
+
+                    # Safely extract data
+                    similarity_score = similarity_info.get("score", 0)
+                    relationship_type = similarity_info.get(
+                        "relationship_type", "unknown"
+                    )
+                    relationship_description = similarity_info.get(
+                        "description", "Related words"
+                    )
+
+                    # Only add edges for words that seem related above a threshold
+                    if similarity_score > 0.3:
+                        # Create a detailed label based on the relationship type
+                        if relationship_type == "direct_translation":
+                            edge_label = "direct translation"
+                        elif relationship_type == "cognate":
+                            edge_label = "cognate"
+                        elif relationship_type == "semantic_equivalent":
+                            edge_label = "equivalent"
+                        else:
+                            edge_label = relationship_type.replace("_", " ")
+
+                        # Create detailed tooltip with linguistic information
+                        linguistic_features = similarity_info.get(
+                            "linguistic_features", {}
+                        )
+                        pos_match = linguistic_features.get("pos_match", False)
+                        is_cognate = linguistic_features.get("is_cognate", False)
+
+                        # Build tooltip with rich information
+                        tooltip_parts = [
+                            f"{relationship_description}",
+                            f"Source: {source_word} ({source_pos_val})"
+                            if source_pos_val
+                            else f"Source: {source_word}",
+                            f"Target: {target_word} ({target_pos_val})"
+                            if target_pos_val
+                            else f"Target: {target_word}",
+                        ]
+
+                        if pos_match:
+                            tooltip_parts.append("Same part of speech ✓")
+
+                        if is_cognate:
+                            tooltip_parts.append("Historical cognate words ✓")
+
+                        # Add edit distance if available
+                        edit_distance = linguistic_features.get("edit_distance")
+                        if edit_distance:
+                            tooltip_parts.append(
+                                f"String similarity: {edit_distance:.2f}"
+                            )
+
+                        tooltip = "; ".join(tooltip_parts)
+
+                        # Add translation edge
+                        graph_data["edges"].append(
+                            {
+                                "from": source_id,
+                                "to": target_id,
+                                "relation": relationship_type,
+                                "strength": similarity_score,
+                                "label": edge_label,
+                                "description": relationship_description,
+                                "title": tooltip,  # This will be used for the edge tooltip
+                            }
+                        )
+                except Exception as e:
+                    logger.error(
+                        f"Error processing word pair {source_word}/{target_word}: {type(e).__name__}: {str(e)}"
+                    )
+                    continue
+
+        # Process related words for source and target sentences
+        try:
+            process_related_words(
+                source_pos,
+                source_lang,
+                target_lang,
+                graph_data,
+                added_nodes,
+                word_relations_cache,
+                sentence_group,
+            )
+        except Exception as e:
+            logger.error(
+                f"Error processing source related words: {type(e).__name__}: {str(e)}"
+            )
+
+        try:
+            process_related_words(
+                target_pos,
+                target_lang,
+                source_lang,
+                graph_data,
+                added_nodes,
+                word_relations_cache,
+                sentence_group,
+                is_target=True,
+            )
+        except Exception as e:
+            logger.error(
+                f"Error processing target related words: {type(e).__name__}: {str(e)}"
+            )
+
+    except Exception as e:
+        logger.error(f"Error in process_sentence_pair: {type(e).__name__}: {str(e)}")
+        # Don't re-raise - allow processing to continue with other sentences
+
+
+def add_cross_sentence_relationships(graph_data):
+    """Add relationships between words across different sentences"""
+    try:
+        # Group nodes by sentence
+        sentence_groups = {}
+        for node in graph_data["nodes"]:
+            group = node.get("sentence_group", "")
+            if group not in sentence_groups:
+                sentence_groups[group] = []
+            sentence_groups[group].append(node)
+
+        # Create connections between related words in different sentences
+        processed_pairs = set()
+
+        for group1, nodes1 in sentence_groups.items():
+            for group2, nodes2 in sentence_groups.items():
+                # Skip same group or already processed pairs
+                if group1 == group2 or (group1, group2) in processed_pairs:
+                    continue
+
+                processed_pairs.add((group1, group2))
+                processed_pairs.add((group2, group1))
+
+                # Find words with same part of speech to connect
+                for node1 in nodes1:
+                    # Skip non-primary nodes and nodes with unknown pos
+                    if node1.get("node_type", "") != "primary":
+                        continue
+
+                    pos1 = node1.get("pos", "unknown")
+                    if pos1 == "unknown":
+                        continue
+
+                    # Find matching POS in the other sentence
+                    for node2 in nodes2:
+                        # Skip non-primary nodes and nodes with different languages
+                        if node2.get("node_type", "") != "primary" or node2.get(
+                            "language", ""
+                        ) != node1.get("language", ""):
+                            continue
+
+                        pos2 = node2.get("pos", "unknown")
+                        if pos2 == pos1:
+                            try:
+                                # Use the enhanced similarity function for words in the same language
+                                similarity_info = calculate_word_similarity(
+                                    node1["label"],
+                                    node2["label"],
+                                    node1.get("language", "en"),
+                                    node2.get("language", "en"),
+                                )
+
+                                # Extract similarity score and information
+                                similarity_score = similarity_info.get("score", 0)
+                                similarity_info.get(
+                                    "relationship_type", "cross_sentence"
+                                )
+                                description = similarity_info.get(
+                                    "description",
+                                    f"Related {pos1} words across sentences",
+                                )
+
+                                # Connect only if there's some similarity or same POS for key types
+                                if similarity_score >= 0.3 or pos1 in [
+                                    "noun",
+                                    "verb",
+                                    "adjective",
+                                ]:
+                                    # Create a tooltip with linguistic information
+                                    tooltip = f"{description}; Same part of speech: {pos1}; Similarity: {similarity_score:.2f}"
+
+                                    graph_data["edges"].append(
+                                        {
+                                            "from": node1["id"],
+                                            "to": node2["id"],
+                                            "relation": "cross_sentence",
+                                            "strength": max(0.4, similarity_score),
+                                            "label": f"related {pos1}",
+                                            "description": description,
+                                            "title": tooltip,
+                                            "color": "#AA44BB",  # Purple for cross-sentence
+                                            "dashes": True,
+                                        }
+                                    )
+                            except Exception as e:
+                                logger.error(
+                                    f"Error in cross-sentence processing: {str(e)}"
+                                )
+                                continue
+    except Exception as e:
+        logger.error(f"Error in add_cross_sentence_relationships: {str(e)}")
+        # Don't re-raise, allow processing to continue
+
+
+def add_cross_language_relationships(graph_data, target_langs):
+    """Add relationships between words in different languages"""
+    logger.info(
+        f"Adding cross-language relationships for {len(target_langs)} languages"
+    )
+
+    try:
+        # Group nodes by language and POS
+        nodes_by_lang_pos = {}
+
+        # Initialize for each language
+        for lang in target_langs:
+            nodes_by_lang_pos[lang] = {}
+
+        # Process all nodes
+        for node in graph_data["nodes"]:
+            # Skip related words
+            node_type = node.get("node_type", "")
+            if node_type != "primary":
+                continue
+
+            # Get language and POS
+            lang = node.get("language", "")
+            pos = node.get("pos", "unknown")
+
+            # Skip nodes with unspecified language
+            if lang not in nodes_by_lang_pos:
+                continue
+
+            # Skip nodes with unknown POS
+            if pos == "unknown":
+                continue
+
+            # Add node to the appropriate group
+            if pos not in nodes_by_lang_pos[lang]:
+                nodes_by_lang_pos[lang][pos] = []
+
+            nodes_by_lang_pos[lang][pos].append(node)
+
+        # Create connections between related words in different languages
+        processed_pairs = set()
+
+        for lang1 in target_langs:
+            for lang2 in target_langs:
+                if lang1 == lang2 or (lang1, lang2) in processed_pairs:
+                    continue
+
+                processed_pairs.add((lang1, lang2))
+
+                # For each part of speech, find potential matches
+                for pos in set(nodes_by_lang_pos[lang1].keys()) & set(
+                    nodes_by_lang_pos[lang2].keys()
+                ):
+                    for node1 in nodes_by_lang_pos[lang1][pos]:
+                        for node2 in nodes_by_lang_pos[lang2][pos]:
+                            try:
+                                # If the nodes are in same sentence group, good candidate for connection
+                                same_sentence = node1.get(
+                                    "sentence_group", ""
+                                ) == node2.get("sentence_group", "")
+
+                                # Use enhanced similarity calculation
+                                similarity_info = calculate_word_similarity(
+                                    node1["label"], node2["label"], lang1, lang2
+                                )
+
+                                # Get similarity score and relationship data
+                                similarity_score = similarity_info.get("score", 0)
+                                relationship_type = similarity_info.get(
+                                    "relationship_type", "cross_language"
+                                )
+                                description = similarity_info.get(
+                                    "description", "Related words across languages"
+                                )
+
+                                # Connect nodes if semantically similar
+                                min_threshold = 0.2 if same_sentence else 0.4
+
+                                if similarity_score >= min_threshold:
+                                    # Create a tooltip with translation information
+                                    tooltip = f"{description}; {node1['label']} ({lang1}) ↔ {node2['label']} ({lang2})"
+
+                                    if same_sentence:
+                                        tooltip += "; Same sentence ✓"
+
+                                    # Add cross-language edge
+                                    graph_data["edges"].append(
+                                        {
+                                            "from": node1["id"],
+                                            "to": node2["id"],
+                                            "relation": "cross_language",
+                                            "strength": similarity_score,
+                                            "label": relationship_type.replace(
+                                                "_", " "
+                                            ),
+                                            "description": description,
+                                            "title": tooltip,
+                                            "color": "#4CC9F0",  # Blue for cross-language
+                                            "width": 2,
+                                            "dashes": True,
+                                        }
+                                    )
+                            except Exception as e:
+                                logger.error(
+                                    f"Error processing cross-language pair: {str(e)}"
+                                )
+                                continue
+    except Exception as e:
+        logger.error(f"Error in add_cross_language_relationships: {str(e)}")
+        # Don't re-raise - allow processing to continue
+
+
+# Edge strength by relation type, for related-word edges in process_related_words.
+_RELATION_STRENGTHS = {
+    "synonym": 0.9,
+    "antonym": 0.7,
+    "hypernym": 0.6,
+    "hyponym": 0.6,
+    "contextual": 0.5,
+}
+
+
+def process_related_words(
+    words_data,
+    source_lang,
+    target_lang,
+    graph_data,
+    added_nodes,
+    word_relations_cache,
+    sentence_group="",
+    is_target=False,
+):
+    """
+    Process related words for a list of words and add them to the graph.
+
+    Args:
+        words_data: List of word data dictionaries with parts of speech
+        source_lang: Source language code
+        target_lang: Target language code
+        graph_data: The graph data structure to update
+        added_nodes: Set of already added node IDs to avoid duplicates
+        word_relations_cache: Cache of word relations to avoid duplicates
+        sentence_group: Optional sentence group identifier
+        is_target: Whether these are target language words
+    """
+    # Skip if no words to process
+    if not words_data:
+        return
+
+    # Get language for these words (either source or target lang)
+    lang = target_lang if is_target else source_lang
+
+    # For now, we'll use a simple predefined set of related words for common categories
+    # In a real implementation, this would be replaced with a call to a language model
+
+    # Process each word
+    for word_data in words_data:
+        word, pos, _ = _word_pos_details(word_data)
+
+        # Skip words that don't have a clear POS
+        if pos == "unknown":
+            continue
+
+        # Create a simple cache key
+        cache_key = f"{word}_{lang}_{pos}"
+
+        # Skip if we've already processed this word
+        if cache_key in word_relations_cache:
+            related_words = word_relations_cache[cache_key]
+        else:
+            # Generate related words (in a real implementation, this would call a language model)
+            related_words = generate_simple_related_words(word, pos, lang)
+            word_relations_cache[cache_key] = related_words
+
+        # Skip if no related words found
+        if not related_words:
+            continue
+
+        # Add related word nodes
+        word_id = f"{word}_{lang}{sentence_group}"
+
+        for related_word, relation_type in related_words:
+            # Create a unique ID for this related word
+            related_id = f"{related_word}_{lang}-related{sentence_group}"
+
+            # Skip if already added
+            if related_id in added_nodes:
+                continue
+
+            # Add node for related word
+            graph_data["nodes"].append(
+                {
+                    "id": related_id,
+                    "label": related_word,
+                    "language": lang,
+                    "pos": pos,  # Assume same POS as original word
+                    "details": relation_type,
+                    "node_type": "related",
+                    "group": f"{lang}-related{sentence_group}",
+                    "sentence_group": sentence_group,
+                }
+            )
+            added_nodes.add(related_id)
+
+            # Add edge from original word to related word, strength by relation type
+            strength = _RELATION_STRENGTHS.get(relation_type, 0.5)
+
+            graph_data["edges"].append(
+                {
+                    "from": word_id,
+                    "to": related_id,
+                    "relation": relation_type,
+                    "strength": strength,
+                    "label": relation_type,
+                }
+            )
+
+
+# Improve
+def generate_simple_related_words(word, pos, language):
+    """Generate some simple related words for common words in various languages"""
+    # This is a very simplified approach for demonstration
+    # In a real implementation, this would call a language model API
+
+    # Some common word relationships in English
+    if language == "en":
+        if word == "good":
+            return [
+                ("excellent", "synonym"),
+                ("bad", "antonym"),
+                ("quality", "hypernym"),
+                ("great", "synonym"),
+                ("rating", "contextual"),
+            ]
+        elif word == "happy":
+            return [
+                ("joyful", "synonym"),
+                ("sad", "antonym"),
+                ("emotion", "hypernym"),
+                ("ecstatic", "hyponym"),
+                ("birthday", "contextual"),
+            ]
+
+    # Some common word relationships in Spanish
+    elif language == "es":
+        if word == "bueno":
+            return [
+                ("excelente", "synonym"),
+                ("malo", "antonym"),
+                ("calidad", "hypernym"),
+                ("genial", "synonym"),
+                ("valoración", "contextual"),
+            ]
+        elif word == "feliz":
+            return [
+                ("alegre", "synonym"),
+                ("triste", "antonym"),
+                ("emoción", "hypernym"),
+                ("extático", "hyponym"),
+                ("cumpleaños", "contextual"),
+            ]
+
+    # Some common word relationships in Catalan
+    elif language == "ca":
+        if word == "bo":
+            return [
+                ("excel·lent", "synonym"),
+                ("dolent", "antonym"),
+                ("qualitat", "hypernym"),
+                ("genial", "synonym"),
+                ("valoració", "contextual"),
+            ]
+        elif word == "feliç":
+            return [
+                ("content", "synonym"),
+                ("trist", "antonym"),
+                ("emoció", "hypernym"),
+                ("extàtic", "hyponym"),
+                ("aniversari", "contextual"),
+            ]
+
+    # Default: return empty list if no predefined relations
+    return []
+
+
+def merge_language_graphs(graph_data_dict):
+    """Merge multiple language graphs into a single graph with cross-language connections"""
+    if not graph_data_dict or len(graph_data_dict) == 0:
+        return None
+
+    # Create a new graph combining all nodes and edges
+    merged_graph = {
+        "nodes": [],
+        "edges": [],
+        "metadata": {
+            "source_lang": next(iter(graph_data_dict.values()))["metadata"][
+                "source_lang"
+            ],
+            "target_langs": [],
+            "source_text": next(iter(graph_data_dict.values()))["metadata"][
+                "source_text"
+            ],
+            "translations": {},
+        },
+    }
+
+    # Track all nodes we've added to avoid duplicates
+    added_nodes = set()
+
+    # Add nodes and edges from each language graph
+    for lang, graph in graph_data_dict.items():
+        # Update metadata
+        merged_graph["metadata"]["target_langs"].append(lang)
+        if "translations" in graph["metadata"]:
+            merged_graph["metadata"]["translations"][lang] = graph["metadata"][
+                "translations"
+            ]
+
+        # Add nodes. A shallow copy is enough - every node/edge dict here is flat
+        # (strings/floats/bools, no nested mutable containers) and nothing after
+        # the merge mutates the copies in place.
+        for node in graph["nodes"]:
+            if node["id"] not in added_nodes:
+                merged_graph["nodes"].append(dict(node))
+                added_nodes.add(node["id"])
+
+        # Add edges
+        for edge in graph["edges"]:
+            merged_graph["edges"].append(dict(edge))
+
+    # Now add cross-language relationships
+    target_langs = merged_graph["metadata"]["target_langs"]
+    if len(target_langs) > 1:
+        add_cross_language_relationships(merged_graph, target_langs)
+
+    logger.info(f"Merged {len(graph_data_dict)} language graphs into a single graph")
+    return merged_graph
+
+
 def build_word_cooccurrence_network(
     text: str,
     language: str,
@@ -1106,6 +1727,12 @@ async def analyze_word_linguistics(
     """
     Analyze a word's linguistic properties using LLM for rich language learning information.
 
+    The LLM half of this is cached to disk (see `analysis_cache.py`), keyed on the
+    word, language, and the provider/model that produced it - a repeat request for
+    the same combination is served from the cache instead of calling the LLM again.
+    A cache hit skips spaCy too, since the cached dict already has everything a
+    fresh run would produce.
+
     Args:
         word: The word to analyze
         language: Code (en, es, ca)
@@ -1114,6 +1741,18 @@ async def analyze_word_linguistics(
     Returns:
         Dictionary with comprehensive linguistic information
     """
+    cache = get_word_analysis_cache()
+    provider = model_name = None
+    if client is not None:
+        status = client.get_model_status()
+        provider, model_name = status.get("provider"), status.get("model_name")
+        cached = cache.get(word, language, provider, model_name)
+        if cached is not None:
+            logger.info(
+                f"Using cached word analysis for '{word}' ({language}, {provider}:{model_name})"
+            )
+            return cached
+
     try:
         # Load spaCy model for basic analysis
         nlp = load_spacy_model(language)
@@ -1178,6 +1817,8 @@ async def analyze_word_linguistics(
                     word, language, analysis["pos"], client
                 )
                 analysis.update(enhanced_info)
+                if "llm_error" not in enhanced_info:
+                    cache.set(word, language, provider, model_name, analysis)
             except Exception as e:
                 logger.warning(f"LLM analysis failed for {word}: {e}")
 
