@@ -6,7 +6,7 @@ This module uses pydantic-settings to manage configuration from environment vari
 
 from enum import Enum
 from typing import Any, Dict, List
-from pydantic import Field, computed_field, model_validator
+from pydantic import Field, computed_field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -165,6 +165,22 @@ class IdiomaAppSettings(BaseSettings):
         elif self.llm_provider == LLMProvider.ANTHROPIC:
             return self.anthropic_models_list
         return []
+
+    @field_validator("llm_provider", mode="before")
+    @classmethod
+    def _accept_claude_as_an_alias_for_anthropic(cls, value: Any) -> Any:
+        """
+        Accept LLM_PROVIDER=claude as a synonym for "anthropic".
+
+        "anthropic" is the SDK/API name and the only value LLMProvider knows about,
+        but "claude" is what people actually call the provider - typing it into
+        .env is a natural mistake, and without this it isn't a silent fallback,
+        it's a hard crash: `settings = IdiomaAppSettings()` at module import time
+        raises a pydantic ValidationError before the app can even start.
+        """
+        if isinstance(value, str) and value.strip().lower() == "claude":
+            return LLMProvider.ANTHROPIC.value
+        return value
 
     @model_validator(mode="after")
     def validate_provider_specific_settings(self) -> "IdiomaAppSettings":
