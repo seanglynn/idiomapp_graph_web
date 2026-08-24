@@ -1,10 +1,11 @@
 #!/bin/bash
 set -e
 
-# Create Streamlit credentials file to skip onboarding
-mkdir -p /root/.streamlit
+# Create Streamlit credentials file to skip onboarding. $HOME is the non-root
+# container user's home (see docker/Dockerfile), not /root.
+mkdir -p "${HOME}/.streamlit"
 echo '[general]
-email = ""' > /root/.streamlit/credentials.toml
+email = ""' > "${HOME}/.streamlit/credentials.toml"
 
 # Create directories if they don't exist
 mkdir -p /app/logs
@@ -30,6 +31,13 @@ elif [ "${LLM_PROVIDER:-ollama}" = "openai" ]; then
   fi
   if [ -n "${OPENAI_ORGANIZATION}" ]; then
     echo "- OpenAI organization: ${OPENAI_ORGANIZATION}"
+  fi
+elif [ "${LLM_PROVIDER:-ollama}" = "anthropic" ]; then
+  echo "- Claude model: ${ANTHROPIC_MODEL:-claude-haiku-4-5}"
+  if [ -z "${ANTHROPIC_API_KEY}" ]; then
+    echo "- WARNING: ANTHROPIC_API_KEY is not set. You will need to provide it in the UI."
+  else
+    echo "- Anthropic API key: [CONFIGURED]"
   fi
 fi
 

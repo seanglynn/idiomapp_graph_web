@@ -1,0 +1,16 @@
+[flake8]
+# NOTE: flake8 does not read pyproject.toml, so this config must live in its own
+# file. The [tool.flake8] block that used to sit in pyproject.toml was inert and
+# the 79-character default applied instead.
+max-line-length = 88
+# E203/W503 conflict with black's slicing and line-break style.
+# E501 is delegated to black, which enforces length but cannot split long string
+# literals or comments - flagging those here would only create unfixable noise.
+extend-ignore = E203, W503, E501
+exclude =
+    .git,
+    __pycache__,
+    .venv,
+    build,
+    dist,
+    .mypy_cache

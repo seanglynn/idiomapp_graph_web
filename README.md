@@ -1,7 +1,10 @@
 # IdiomApp
+
+[![CI](https://github.com/seanglynn/idiomapp_graph_web/actions/workflows/ci.yml/badge.svg)](https://github.com/seanglynn/idiomapp_graph_web/actions/workflows/ci.yml)
+
 Visualizing linguistic connections through interactive graphs and networks.
 
-**¿Qué es esto?** 
+**¿Qué es esto?**
 - Establecer relaciones entre palabras y frases en varios idiomas.
 
 **¿Por qué?**
@@ -10,135 +13,82 @@ Visualizing linguistic connections through interactive graphs and networks.
 **¿Cómo?**
 - Con LLMs, NLP, semantic graph & co-occurrence networks obvio!
 
-
 ## Project Structure
 
 - `idiomapp/streamlit/`: Main Streamlit application
-- `idiomapp/utils/`: Utility modules for LLM integration, NLP, TTS, state management, and logging
-  - `state_utils.py`: Centralized state management with caching and session state utilities
-  - `llm_utils.py`: LLM client abstractions for Ollama and OpenAI
-  - `nlp_utils.py`: NLP processing and graph generation utilities
-  - `audio_utils.py`: Text-to-speech and audio processing
-  - `logging_utils.py`: Centralized logging configuration
-- `archive/`: Archived code (previous FastAPI application)
+- `idiomapp/utils/`: LLM integration, NLP, TTS, state, and logging
+  - `llm_utils.py`: LLM client abstractions for Ollama, OpenAI, and Anthropic (Claude)
+  - `schemas.py`: Typed Pydantic schemas for LLM word-analysis output
+  - `json_utils.py`: JSON extraction fallback for LLM responses
+  - `nlp_utils.py`: NLP processing and graph generation
+  - `state_utils.py`: Session state management and caching
+  - `audio_utils.py`: Text-to-speech
+  - `logging_utils.py`: Centralized logging config
+- `tests/`: pytest suite (backend + Streamlit `AppTest` UI coverage)
+- `docker/`: Dockerfile and container entrypoint
 
 ## Quick Start
 
-### Local Development
-
 ```bash
-# Install dependencies
-make install
-
-# Run the Streamlit app with auto-refresh
-make run-graph-dev
+make install        # uv sync
+make run-graph-dev   # streamlit run, with auto-reload, at http://localhost:8503
 ```
 
-### Docker (Recommended)
+Or with Docker:
 
 ```bash
-# Start application containers
-make docker-start
-
-# Stop when finished
-make docker-down
+make docker-start    # build + run in the foreground, at http://localhost:8503
+make docker-down     # stop
 ```
 
-Access the application at: http://localhost:8503
-
-## Docker Commands
-
-- `make docker-start`: Start containers (interactive mode with logs)
-- `make docker-down`: Stop containers
-- `make docker-shell`: Access Streamlit container shell
-- `make ollama-shell`: Access Ollama container shell
-
-## Docker Setup
-
-This application can be run in Docker containers for easy deployment. Docker-specific files are organized in the `docker/` directory:
-
-- `docker/Dockerfile`: Container definition for the Streamlit application
-- `docker/docker-entrypoint.sh`: Entry point script that handles configuration and startup
-
-### Running with Docker
-
-```bash
-# Start in interactive mode (recommended for development)
-make docker-start
-
-# Or run in background
-make docker-start-detached
-```
-
-Access the application at: http://localhost:8503
+Other Docker targets: `make docker-start-detached` (background), `make docker-logs`,
+`make docker-shell` / `make ollama-shell` (debugging).
 
 ## Configuration
 
-Create a `.env` file with the following settings:
+Copy `env.example` to `.env` and adjust — every setting is documented inline there.
+The one required choice is `LLM_PROVIDER` (`ollama`, `openai`, or `anthropic`); each
+provider needs its own API key/host set below that.
 
-```
-# LLM Provider Configuration
-# Choose between "ollama" or "openai"
-LLM_PROVIDER=ollama
-
-# Ollama configuration (if using Ollama)
-OLLAMA_HOST=http://localhost:11434  # Use http://ollama:11434 for Docker
-DEFAULT_MODEL=llama3.2:latest
-
-# OpenAI configuration (if using OpenAI)
-OPENAI_API_KEY=your_openai_api_key_here
-OPENAI_ORGANIZATION=your_openai_organization_id_here
-OPENAI_MODEL=gpt-3.5-turbo
-
-# Logging
-LOG_LEVEL=INFO
-
-# Streamlit configuration
-STREAMLIT_SERVER_PORT=8503
-STREAMLIT_SERVER_HEADLESS=false    # Use true for Docker/production
-STREAMLIT_SERVER_ENABLECORS=false
-STREAMLIT_SERVER_ADDRESS=localhost  # Use 0.0.0.0 for Docker
+```bash
+cp env.example .env
 ```
 
-### Environment Variables
+## LLM Providers
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `LLM_PROVIDER` | LLM provider to use (`ollama` or `openai`) | `ollama` |
-| `OLLAMA_HOST` | URL of the Ollama service (when using Ollama) | `http://localhost:11434` |
-| `DEFAULT_MODEL` | Default Ollama model to use | `llama3.2:latest` |
-| `OPENAI_API_KEY` | OpenAI API key (when using OpenAI) | empty |
-| `OPENAI_ORGANIZATION` | OpenAI organization ID (when using OpenAI) | empty |
-| `OPENAI_MODEL` | OpenAI model to use | `gpt-3.5-turbo` |
-| `LOG_LEVEL` | Logging level | `INFO` |
-| `STREAMLIT_SERVER_PORT` | Port for Streamlit server | `8503` |
-| `STREAMLIT_SERVER_HEADLESS` | Run in headless mode | `false` |
-| `STREAMLIT_SERVER_ENABLECORS` | Enable CORS | `false` |
-| `STREAMLIT_SERVER_ADDRESS` | Bind server to address | `0.0.0.0` in Docker, `localhost` for local dev |
+Switch providers via `LLM_PROVIDER` in `.env` or from the sidebar at runtime.
 
-## LLM Integration
+- **Ollama** (default) — local models like `llama3.2:latest`. Needs Ollama running
+  and reachable at `OLLAMA_HOST`.
+- **OpenAI** — needs `OPENAI_API_KEY`.
+- **Anthropic (Claude)** — needs `ANTHROPIC_API_KEY`. Defaults to `claude-haiku-4-5`
+  (fastest/cheapest); switch to `claude-opus-5` for higher-quality analysis. Claude
+  models reject `temperature`/`top_p` — response depth is controlled by
+  `ANTHROPIC_EFFORT` instead, which only applies to models that support it (see
+  `ANTHROPIC_MODEL_CAPABILITIES` in `idiomapp/config.py`).
 
-This application supports two different LLM providers:
+## Development
 
-### Ollama (Default)
+```bash
+make test     # pytest
+make lint     # flake8 + black --check
+make format   # black
+```
 
-Uses the local Ollama service with models like `llama3.2:latest`. Requires the Ollama service to be running and accessible.
-
-### OpenAI
-
-Uses OpenAI's API with models like `gpt-3.5-turbo`, `gpt-4`, etc. Requires an OpenAI API key.
-
-You can switch between providers in the UI or by setting the `LLM_PROVIDER` environment variable.
+CI runs `test` and `lint` on every push.
 
 ## Security Note
 
-When running locally, the app is configured to only be accessible via `localhost`.
-
-When running in Docker, the server binds to `0.0.0.0` (all interfaces) to make it accessible from your host machine at http://localhost:8503. The Docker container is isolated, but the port is mapped to your localhost.
+Locally, the app binds to `localhost` only. In Docker, it binds to `0.0.0.0` inside
+the container, isolated, with only the mapped port (`8503`) reachable from your host.
 
 ## Troubleshooting
 
-If you encounter Docker issues:
-1. Verify Docker and Docker Compose are installed and running
-2. Check Ollama accessibility from the Streamlit container
-3. Use `make docker-shell` or `make ollama-shell` for debugging 
+- **Docker can't reach Ollama** — confirm the Ollama container/service is up and
+  `OLLAMA_HOST` points at it (`http://ollama:11434` inside Docker, not `localhost`).
+- **Files under `logs/` or `graph_storage/` are owned by `root`** — the Docker image
+  runs as a non-root user matching your host UID (default `1000`). If your host user
+  has a different UID, rebuild with `docker compose build --build-arg UID=$(id -u)
+  --build-arg GID=$(id -g)`.
+- For anything else: `make docker-logs`, or `make docker-shell` / `make ollama-shell`
+  to poke around inside a container.
