@@ -1,10 +1,11 @@
 #!/bin/bash
 set -e
 
-# Create Streamlit credentials file to skip onboarding
-mkdir -p /root/.streamlit
+# Create Streamlit credentials file to skip onboarding. $HOME is the non-root
+# container user's home (see docker/Dockerfile), not /root.
+mkdir -p "${HOME}/.streamlit"
 echo '[general]
-email = ""' > /root/.streamlit/credentials.toml
+email = ""' > "${HOME}/.streamlit/credentials.toml"
 
 # Create directories if they don't exist
 mkdir -p /app/logs
