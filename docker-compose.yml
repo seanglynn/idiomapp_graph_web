@@ -20,8 +20,11 @@ services:
   ollama:
     image: ollama/ollama:latest
     container_name: idiomapp-ollama
-    ports:
-      - "11434:11434"
+    # No host port mapping: the streamlit service reaches this over the internal
+    # Docker network at ollama:11434, and mapping 11434 to the host conflicts with
+    # a native Ollama install already using that port there. Add back
+    # "11434:11434" (or a different host port) if you need to reach this
+    # container's Ollama directly from the host.
     volumes:
       - ./ollama-models:/root/.ollama
     networks:
