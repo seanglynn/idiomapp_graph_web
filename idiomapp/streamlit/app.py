@@ -1,13 +1,11 @@
 import os
 import re
-import json
 import asyncio
-import tempfile
 import html
 
 # Third-party imports
 import streamlit as st
-from pyvis.network import Network
+from streamlit_echarts import st_echarts
 
 # Internal imports
 from idiomapp.utils.llm_utils import (
@@ -20,19 +18,25 @@ from idiomapp.utils.schemas import Translation
 from idiomapp.utils.state_utils import get_llm_client, get_provider_credentials
 from idiomapp.utils.logging_utils import get_logger, get_recent_logs, clear_logs
 from idiomapp.utils.graph_storage import get_graph_storage
+from idiomapp.utils.graph_viz import (
+    GRAPH_CLICK_JS,
+    build_graph_echarts_options,
+    cooccurrence_graph_to_echarts_data,
+    filter_invalid_nodes,
+    format_entries,
+    resolve_graph_click,
+    semantic_graph_to_echarts_data,
+    word_analysis_to_echarts_data,
+)
 from idiomapp.config import (
     settings,
     LANGUAGE_MAP,
     LLMProvider,
-    POS_BORDER_COLORS,
-    GROUP_COLORS,
-    RELATION_COLORS,
 )
 from idiomapp.utils.nlp_utils import (
     split_into_sentences,
     build_word_cooccurrence_network,
     detect_language,
-    get_language_color,
     analyze_word_linguistics,
     process_sentence_pair,
     add_cross_sentence_relationships,
@@ -824,532 +828,82 @@ async def analyze_translation(source_text, target_texts, target_langs):
     return graph_data
 
 
-# Add this helper function right before the visualize_translation_graph function
-def sanitize_tooltip_text(text):
-    """
-    Sanitize text for tooltips by removing HTML tags and converting special characters.
-
-    Args:
-        text: The text to sanitize
-
-    Returns:
-        Text with HTML tags removed and special characters escaped
-    """
-    # Remove HTML tags but keep the content between them
-    text = re.sub(r"<[^>]*>", "", text)
-
-    # Replace < and > with their HTML entities to prevent any remaining tags from being interpreted
-    text = text.replace("<", "&lt;").replace(">", "&gt;")
-
-    return text
-
-
-# Shared pyvis node/edge styling for the translation and co-occurrence graphs -
-# identical in both views; only physics/interaction/manipulation differ per view.
-_PYVIS_SHARED_NODE_EDGE_OPTIONS = """
-  "nodes": {
-    "borderWidth": 2,
-    "borderWidthSelected": 4,
-    "color": {
-      "border": "#4361EE",
-      "background": "#4CC9F0"
-    },
-    "font": {
-      "size": 16,
-      "face": "Arial",
-      "color": "#FAFAFA"
-    },
-    "shadow": true
-  },
-  "edges": {
-    "color": {
-      "color": "#AAAAAA",
-      "highlight": "#F72585",
-      "hover": "#F72585"
-    },
-    "smooth": {
-      "enabled": true,
-      "type": "dynamic"
-    },
-    "shadow": false,
-    "width": 2
-  }"""
-
-
 def visualize_translation_graph(graph_data):
-    """
-    Visualize translation and related words using PyVis.
-
-    Args:
-        graph_data: Dictionary with nodes and edges
-    """
+    """Visualize translation and related words as an interactive ECharts graph,
+    with a click-to-select side panel (see _render_graph_selection_panel)."""
     logger.info("Visualizing translation graph")
 
-    # Validate graph data
     if not graph_data or not isinstance(graph_data, dict):
         logger.warning("Invalid or empty graph data provided")
         st.warning("No graph data available to visualize.")
         return
 
-    # Check if this is an error result
     if graph_data.get("metadata", {}).get("error"):
         logger.warning("Graph data contains error, skipping visualization")
         st.warning("Unable to generate graph due to translation errors.")
         return
 
-    # Check if we have any nodes to display
-    nodes = graph_data.get("nodes", [])
-    edges = graph_data.get("edges", [])
-
-    if not nodes:
+    if not graph_data.get("nodes"):
         logger.warning("No nodes in graph data")
         st.info("No words to display in the graph. Try translating more text.")
         return
 
-    # Filter out any error-related nodes
-    valid_nodes = []
-    error_keywords = ["translation", "failed", "error", "try", "again"]
-
-    for node in nodes:
-        node_label = node.get("label", "").lower()
-        if not any(keyword in node_label for keyword in error_keywords):
-            valid_nodes.append(node)
-        else:
-            logger.warning(f"Filtering out error-related node: {node.get('label', '')}")
-
-    if not valid_nodes:
+    filtered = filter_invalid_nodes(graph_data)
+    if not filtered["nodes"]:
         logger.warning("All nodes filtered out as error-related")
         st.warning("Unable to generate meaningful graph from the translation results.")
         return
 
-    # Update graph data with filtered nodes
-    graph_data["nodes"] = valid_nodes
+    styled = semantic_graph_to_echarts_data(filtered)
+    options = build_graph_echarts_options(styled)
 
-    # Filter edges that reference filtered-out nodes
-    valid_node_ids = {node["id"] for node in valid_nodes}
-    valid_edges = []
-
-    for edge in edges:
-        if edge.get("from") in valid_node_ids and edge.get("to") in valid_node_ids:
-            valid_edges.append(edge)
-        else:
-            logger.debug(
-                f"Filtering out edge with invalid node references: {edge.get('from')} -> {edge.get('to')}"
-            )
-
-    graph_data["edges"] = valid_edges
-
-    # Create a network with dark mode friendly colors
-    net = Network(height="400px", width="100%", bgcolor="#0E1117", font_color="#FAFAFA")
-
-    # Set options with dark theme colors and improved physics for force-directed layout
-    net.barnes_hut()
-    net.set_options(
-        "{"
-        + _PYVIS_SHARED_NODE_EDGE_OPTIONS
-        + """,
-      "physics": {
-        "enabled": true,
-        "forceAtlas2Based": {
-          "gravitationalConstant": -100,
-          "centralGravity": 0.01,
-          "springLength": 200,
-          "springConstant": 0.08,
-          "damping": 0.4
-        },
-        "solver": "forceAtlas2Based",
-        "stabilization": {
-          "enabled": true,
-          "iterations": 1000,
-          "updateInterval": 100
-        }
-      },
-      "interaction": {
-        "dragNodes": true,
-        "hideEdgesOnDrag": false,
-        "hideNodesOnDrag": false,
-        "hover": true,
-        "navigationButtons": true,
-        "multiselect": false,
-        "selectable": true,
-        "selectConnectedEdges": false
-      },
-      "manipulation": {
-        "enabled": false
-      }
-    }
-    """
-    )
-
-    # Group colors imported from central config. Sentence-specific variations are a
-    # pure function of constants, so derive them once rather than on every render.
-    if "en-s9" not in GROUP_COLORS:
-        for i in range(1, 10):  # Support up to 10 sentences
-            suffix = f"-s{i}"
-            GROUP_COLORS[f"en{suffix}"] = adjust_color(GROUP_COLORS["en"], i * 10)
-            GROUP_COLORS[f"es{suffix}"] = adjust_color(GROUP_COLORS["es"], i * 10)
-            GROUP_COLORS[f"ca{suffix}"] = adjust_color(GROUP_COLORS["ca"], i * 10)
-            GROUP_COLORS[f"en-related{suffix}"] = adjust_color(
-                GROUP_COLORS["en-related"], i * 10
-            )
-            GROUP_COLORS[f"es-related{suffix}"] = adjust_color(
-                GROUP_COLORS["es-related"], i * 10
-            )
-            GROUP_COLORS[f"ca-related{suffix}"] = adjust_color(
-                GROUP_COLORS["ca-related"], i * 10
-            )
-
-    # POS color accents imported from central config
-
-    # Set edge label visibility (default to hiding for cleaner visualization)
-    show_edge_labels = False
-
-    # Add nodes
-    for node in graph_data["nodes"]:
-        # Determine node language and group
-        node_lang = node.get("language", "unknown")
-        group = node.get("group", "default")
-
-        # Get color based on group
-        color = GROUP_COLORS.get(group, "#4CC9F0")  # Default color if group not found
-
-        # Determine node size based on type
-        if node["node_type"] == "primary":
-            size = 30  # Larger size for primary translation words
-        else:
-            size = 20  # Smaller size for related words
-
-        # Get proper language name for tooltip
-        lang_name = get_language_name(node_lang)
-
-        # Get part of speech and customize border color
-        pos = node.get("pos", "unknown")
-        details = sanitize_tooltip_text(node.get("details", ""))
-        border_color = POS_BORDER_COLORS.get(pos.lower(), "#4361EE")
-
-        # Create simple tooltip content for the node
-        tooltip = f"{node['label']} ({lang_name}); Part of speech: {pos}"
-        if details:
-            tooltip += f"; Details: {details}"
-
-        # Add the node with simple tooltip
-        net.add_node(
-            node["id"],
-            label=node["label"],
-            title=tooltip,  # Simple text tooltip
-            color={"background": color, "border": border_color},
-            size=size,
-            group=group,
-            physics=True,
+    graph_col, panel_col = st.columns([2, 1], gap="medium")
+    with graph_col:
+        result = st_echarts(
+            options=options,
+            events={"click": GRAPH_CLICK_JS},
+            height="400px",
+            key="echarts_semantic_graph",
         )
-
-    # Add edges with relation types
-    for edge in graph_data["edges"]:
-        # Get relation info
-        relation = edge.get("relation", "related")
-        strength = edge.get("strength", 0.5)
-
-        # Customize edge appearance based on relation type
-        if relation == "direct_translation" or relation == "translation":
-            # Direct translation edges are thicker and white
-            width = 3 * strength
-            color = "#FFFFFF"  # White for translation edges
-            arrow = False  # No arrow for translations (bidirectional)
-            smooth = {"enabled": True, "type": "curvedCW"}
-        elif relation == "cognate":
-            # Cognate edges are gold colored
-            width = 2.5 * strength
-            color = "#FFD700"  # Gold for cognates
-            arrow = False
-            smooth = {"enabled": True, "type": "curvedCW"}
-        elif relation == "semantic_equivalent":
-            # Semantic equivalents are teal
-            width = 2.5 * strength
-            color = "#00B8D4"  # Teal for semantic equivalents
-            arrow = False
-            smooth = {"enabled": True, "type": "curvedCW"}
-        elif relation == "cross_sentence":
-            # Cross-sentence connections are purple and dashed
-            width = 1.5 * strength
-            color = edge.get("color", "#AA44BB")  # Purple for cross-sentence
-            arrow = True
-            smooth = {"enabled": True, "type": "curvedCCW"}
-            dashes = True
-        elif "semantic_similarity" in relation:
-            # Cross-language similarities are orange and dashed
-            width = 2 * strength
-            color = edge.get("color", "#FFAA00")  # Orange for semantic similarities
-            arrow = True
-            smooth = {"enabled": True, "type": "curvedCW"}
-            dashes = True
-        else:
-            # Other relations vary by type
-            width = 1 + strength
-            # Color based on relation type from central config
-            color = RELATION_COLORS.get(relation, "#AAAAAA")
-            arrow = True
-            smooth = {"enabled": True, "type": "continuous"}
-            dashes = False
-
-        # Get edge label and tooltip
-        label = sanitize_tooltip_text(edge.get("label", relation.replace("_", " ")))
-
-        # Use our enhanced tooltip if available, otherwise fall back to basic info
-        if "title" in edge:
-            title = sanitize_tooltip_text(edge["title"])
-        elif "description" in edge:
-            title = sanitize_tooltip_text(edge["description"])
-        else:
-            # Create edge title (tooltip) from basic information
-            title = f"{label} ({strength:.2f})"
-
-        # Add the edge with appropriate styling
-        edge_options = {
-            "title": title,
-            "label": label if show_edge_labels else "",
-            "width": width,
-            "color": {"color": color, "highlight": "#F72585"},
-            "smooth": smooth,
-            "arrows": "to" if arrow else "",
-            "dashes": edge.get("dashes", dashes if "dashes" in locals() else False),
-            "physics": True,
-        }
-
-        if relation in ["cross_sentence", "semantic_similarity"] or "dashes" in edge:
-            edge_options["dashes"] = True
-
-        # Add the edge
-        net.add_edge(edge["from"], edge["to"], **edge_options)
-
-    # Create a temporary HTML file
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as tmpfile:
-        path = tmpfile.name
-        net.save_graph(path)
-
-    # Enhance the HTML with click functionality and analysis display
-    enhanced_html = enhance_graph_html(path, graph_data)
-
-    # Clean up the temp file
-    os.unlink(path)
-
-    # Display the enhanced network
-    st.components.v1.html(enhanced_html, height=400)
-
-
-def _build_click_handler_js(graph_data: dict) -> str:
-    """Build the JS snippet that attaches a click handler to the PyVis network.
-
-    Injected directly after `network = new vis.Network(...)` so the
-    `network` variable is still in scope.
-    """
-    nodes_map = {
-        node["id"]: {
-            "word": node["label"],
-            "language": node.get("language", "unknown"),
-            "pos": node.get("pos", "unknown"),
-        }
-        for node in graph_data.get("nodes", [])
-    }
-    return f"""
-            var graphNodes = {json.dumps(nodes_map)};
-            network.on('click', function(params) {{
-                if (params.nodes && params.nodes.length > 0) {{
-                    var nodeData = graphNodes[params.nodes[0]];
-                    if (nodeData) {{
-                        var el = document.getElementById('word-selection-status');
-                        if (el) {{
-                            el.innerHTML = '<div style="background:#4CAF50;color:#fff;padding:10px;border-radius:5px;margin:10px 0;text-align:center;">'
-                                + '<strong>Word: ' + nodeData.word + '</strong> (' + nodeData.language + ') - ' + nodeData.pos
-                                + '<br><small>Use the dropdown below the graph to select and analyze this word.</small></div>';
-                        }}
-                    }}
-                }}
-            }});
-            """
-
-
-_STATUS_HTML = """
-<div id="word-selection-status" style="margin:10px 0;"></div>
-<div style="margin:10px 0;padding:10px;background:#e3f2fd;border:1px solid #2196f3;border-radius:5px;">
-  <strong>Interactive Graph:</strong> Click on any word in the graph above to select it for analysis.
-</div>
-"""
-
-
-def enhance_graph_html(html_path: str, graph_data: dict) -> str:
-    """Enhance PyVis HTML with a click handler and status feedback div."""
-    try:
-        with open(html_path, "r", encoding="utf-8") as f:
-            html_content = f.read()
-
-        network_init = "network = new vis.Network(container, data, options);"
-
-        if network_init in html_content:
-            handler_js = _build_click_handler_js(graph_data)
-            enhanced_html = html_content.replace(
-                network_init, network_init + handler_js
-            )
-            enhanced_html = enhanced_html.replace("</body>", f"{_STATUS_HTML}\n</body>")
-            logger.debug("Injected click handler after network initialization")
-        else:
-            logger.warning(
-                "Could not find network init pattern — click handler not injected"
-            )
-            enhanced_html = html_content.replace("</body>", f"{_STATUS_HTML}\n</body>")
-
-        return enhanced_html
-
-    except Exception as e:
-        logger.error(f"Error enhancing HTML: {e}")
-        with open(html_path, "r", encoding="utf-8") as f:
-            return f.read()
-
-
-def adjust_color(hex_color, amount):
-    """Adjust a hex color by lightening or darkening it"""
-    # Convert hex to RGB
-    hex_color = hex_color.lstrip("#")
-    rgb = tuple(int(hex_color[i : i + 2], 16) for i in (0, 2, 4))
-
-    # Adjust each channel
-    adjusted_rgb = []
-    for channel in rgb:
-        adjusted = channel + amount
-        adjusted = max(0, min(255, adjusted))  # Clamp to valid range
-        adjusted_rgb.append(adjusted)
-
-    # Convert back to hex
-    return "#%02x%02x%02x" % tuple(adjusted_rgb)
+    if result:
+        selection = resolve_graph_click(result.get("chart_event"))
+        if selection:
+            st.session_state["graph_selection"] = {**selection, "source": "semantic"}
+    with panel_col:
+        _render_graph_selection_panel("semantic")
 
 
 def visualize_cooccurrence_network(graph, lang_code=None):
-    """
-    Visualize a word co-occurrence network using Pyvis.
-
-    Args:
-        graph: networkx.Graph with word co-occurrence network
-        lang_code: Language code for color coding (optional)
-
-    Returns:
-        Pyvis network visualization HTML
-    """
-    try:
-        # Create a network with dark mode friendly colors
-        net = Network(
-            height="600px", width="100%", bgcolor="#0E1117", font_color="#FAFAFA"
+    """Visualize a word co-occurrence network as an interactive ECharts graph,
+    with a click-to-select side panel (see _render_graph_selection_panel)."""
+    if len(graph.nodes()) == 0:
+        logger.warning("Co-occurrence graph is empty - no nodes to display")
+        st.info(
+            "No co-occurrence data available for this text. Try a longer text "
+            "or adjust co-occurrence settings."
         )
+        return
 
-        # Set options for visualization
-        net.barnes_hut()
-        net.set_options(
-            "{"
-            + _PYVIS_SHARED_NODE_EDGE_OPTIONS
-            + """,
-          "physics": {
-            "barnesHut": {
-              "gravitationalConstant": -5000,
-              "centralGravity": 0.3,
-              "springLength": 95,
-              "springConstant": 0.04
-            },
-            "stabilization": {
-              "iterations": 1000
+    styled = cooccurrence_graph_to_echarts_data(graph, lang_code)
+    options = build_graph_echarts_options(styled)
+
+    graph_col, panel_col = st.columns([2, 1], gap="medium")
+    with graph_col:
+        result = st_echarts(
+            options=options,
+            events={"click": GRAPH_CLICK_JS},
+            height="600px",
+            key="echarts_cooccurrence_graph",
+        )
+    if result:
+        selection = resolve_graph_click(result.get("chart_event"))
+        if selection:
+            st.session_state["graph_selection"] = {
+                **selection,
+                "source": "cooccurrence",
             }
-          },
-          "interaction": {
-            "dragNodes": true,
-            "hideEdgesOnDrag": false,
-            "hideNodesOnDrag": false,
-            "hover": true
-          }
-        }
-        """
-        )
-
-        # TODO: Dynamic - Language-specific colors - now using shared function from nlp_utils
-
-        # Check if graph has nodes
-        if len(graph.nodes()) == 0:
-            logger.warning("Co-occurrence graph is empty - no nodes to display")
-            return "<div class='alert alert-warning'>No co-occurrence data available for this text. Try a longer text or adjust co-occurrence settings.</div>"
-
-        # Convert node IDs to strings to ensure compatibility with Pyvis
-        nodes_to_add = []
-        for node in graph.nodes():
-            # Make sure node is a string
-            node_id = str(node)
-
-            # Get node weight (degree in the graph)
-            size = 20 + (graph.degree(node) * 3)
-
-            # Create tooltip with node information
-            tooltip = f"Word: {sanitize_tooltip_text(str(node))}; Co-occurrences: {graph.degree(node)}"
-
-            # Get color for the language from our shared function in nlp_utils
-            node_color = get_language_color(lang_code) if lang_code else "#4CC9F0"
-
-            # Add to our list of nodes to add
-            nodes_to_add.append(
-                (
-                    node_id,
-                    {
-                        "label": node_id,
-                        "title": tooltip,
-                        "color": {"background": node_color, "border": "#4361EE"},
-                        "size": size,
-                    },
-                )
-            )
-
-        # Add all nodes
-        for node_id, node_data in nodes_to_add:
-            net.add_node(
-                node_id,
-                label=node_data["label"],
-                title=node_data["title"],
-                color=node_data["color"],
-                size=node_data["size"],
-            )
-
-        # Add edges with weights - ensure string conversion for source/target
-        for source, target, data in graph.edges(data=True):
-            # Convert source and target to strings
-            source_id = str(source)
-            target_id = str(target)
-
-            # Get edge weight (count or other measure)
-            weight = data.get("weight", 1)
-            width = 1 + (weight / 2)  # Scale width based on weight
-
-            # Create edge tooltip (safely)
-            edge_tooltip = f"Co-occurrence: {weight}"
-
-            # Add the edge
-            net.add_edge(
-                source_id,
-                target_id,
-                title=edge_tooltip,
-                width=width,
-                color="#FFFFFF" if weight > 2 else "#AAAAAA",
-            )
-
-        # Create a temporary HTML file
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as tmpfile:
-            path = tmpfile.name
-            net.save_graph(path)
-
-        # Read the HTML
-        with open(path, "r", encoding="utf-8") as f:
-            html_string = f.read()
-
-        # Clean up the temp file
-        os.unlink(path)
-
-        return html_string
-
-    except Exception as e:
-        logger.error(f"Error visualizing co-occurrence network: {str(e)}")
-        return f"<div class='alert alert-danger'>Error creating visualization: {str(e)}</div>"
+    with panel_col:
+        _render_graph_selection_panel("cooccurrence")
 
 
 def show_language_graphs_help():
@@ -1509,28 +1063,6 @@ def _badge(text: str, color: str) -> str:
     )
 
 
-def _format_entry(item) -> str:
-    """Render one canonical {term, gloss} entry (or a plain value) for display."""
-    if isinstance(item, dict):
-        term = item.get("term", "")
-        gloss = item.get("gloss")
-        return f"{term}: {gloss}" if gloss else str(term)
-    return str(item)
-
-
-def _format_entries(data: dict, key: str, *, limit: int = 8) -> list[str]:
-    """
-    Render data[key] as a list of display strings, truncated to *limit*.
-
-    Analysis data reaches the UI already canonicalised by
-    WordAnalysis.to_display_dict(): every Entries field is a list of
-    {"term", "gloss"} dicts and every StrList field is a flat list of strings -
-    never a bare mapping.
-    """
-    items = data.get(key) or []
-    return [_format_entry(item) for item in items[:limit]]
-
-
 def display_word_analysis(word: str, language: str, analysis_data: dict):
     """Display detailed linguistic analysis of a word in a compact, visual layout."""
     lang_name = LANGUAGE_MAP.get(language, {}).get("name", language.title())
@@ -1609,7 +1141,7 @@ def _render_origins_tab(d: dict):
     if "cognates" in d:
         st.markdown("**Cognates in other languages:**")
         st.markdown(
-            "  " + " / ".join(f"**{c}**" for c in _format_entries(d, "cognates"))
+            "  " + " / ".join(f"**{c}**" for c in format_entries(d, "cognates"))
         )
 
 
@@ -1619,22 +1151,22 @@ def _render_meaning_tab(d: dict):
     with col1:
         if "synonyms" in d:
             st.markdown("**Synonyms**")
-            for s in _format_entries(d, "synonyms"):
+            for s in format_entries(d, "synonyms"):
                 st.markdown(f"  - {s}")
         if "hypernym" in d:
             st.markdown(f"**Broader:** {d['hypernym']}")
     with col2:
         if "antonyms" in d:
             st.markdown("**Antonyms**")
-            for a in _format_entries(d, "antonyms"):
+            for a in format_entries(d, "antonyms"):
                 st.markdown(f"  - {a}")
         if "hyponyms" in d:
             st.markdown(
-                f"**Specific:** {', '.join(_format_entries(d, 'hyponyms', limit=5))}"
+                f"**Specific:** {', '.join(format_entries(d, 'hyponyms', limit=5))}"
             )
     if "semantic_field" in d:
         st.caption(
-            "Related concept words: " + " / ".join(_format_entries(d, "semantic_field"))
+            "Related concept words: " + " / ".join(format_entries(d, "semantic_field"))
         )
 
 
@@ -1655,9 +1187,9 @@ def _render_grammar_tab(d: dict):
 
 def _render_usage_tab(d: dict):
     """Render the Usage tab content."""
-    for i, ex in enumerate(_format_entries(d, "examples", limit=5), 1):
+    for i, ex in enumerate(format_entries(d, "examples", limit=5), 1):
         st.markdown(f"{i}. *{ex}*")
-    collocs = _format_entries(d, "collocations", limit=10)
+    collocs = format_entries(d, "collocations", limit=10)
     if collocs:
         st.markdown("**Common collocations:** " + " / ".join(f"`{c}`" for c in collocs))
     if "regional_variations" in d:
@@ -1666,9 +1198,9 @@ def _render_usage_tab(d: dict):
 
 def _render_idioms_tab(d: dict):
     """Render the Idioms tab content."""
-    for item in _format_entries(d, "idioms", limit=6):
+    for item in format_entries(d, "idioms", limit=6):
         st.markdown(f"- *{item}*")
-    for p in _format_entries(d, "proverbs", limit=3):
+    for p in format_entries(d, "proverbs", limit=3):
         st.markdown(f"- *{p}*")
     if "slang_usage" in d:
         st.caption(f"🗣️ Slang: {d['slang_usage']}")
@@ -1678,12 +1210,12 @@ def _render_tips_tab(d: dict):
     """Render the Tips tab content."""
     if "cultural_notes" in d:
         st.info(d["cultural_notes"])
-    false_friends = _format_entries(d, "false_friends")
+    false_friends = format_entries(d, "false_friends")
     if false_friends:
         st.warning("⚠️ False friends: " + ", ".join(false_friends))
-    for m in _format_entries(d, "common_mistakes"):
+    for m in format_entries(d, "common_mistakes"):
         st.error(f"  ✗ {m}", icon=None)
-    for t in _format_entries(d, "tips", limit=4):
+    for t in format_entries(d, "tips", limit=4):
         st.success(f"💡 {t}")
 
 
@@ -1758,150 +1290,143 @@ def _display_analysis_panels(word: str, language: str, analysis_data: dict):
             render_fn(analysis_data)
 
 
-# Graph category config: (data_key, label, color)
-_GRAPH_CATEGORIES = [
-    ("cognates", "🌍 Cognates", "#E91E63"),
-    ("synonyms", "≈ Synonyms", "#3498DB"),
-    ("antonyms", "≠ Antonyms", "#E74C3C"),
-    ("idioms", "🎭 Idioms", "#F39C12"),
-    ("collocations", "🔗 Collocations", "#00BCD4"),
-]
-
-_GRAPH_OPTIONS = """{
-  "nodes":       {"borderWidth": 2, "shadow": true,
-                  "font": {"size": 14, "face": "Arial", "color": "#FAFAFA"}},
-  "edges":       {"color": {"inherit": false},
-                  "smooth": {"enabled": true, "type": "dynamic"}, "width": 2},
-  "physics":     {"enabled": true,
-                  "barnesHut": {"gravitationalConstant": -3000, "centralGravity": 0.3,
-                                "springLength": 150, "springConstant": 0.04},
-                  "stabilization": {"iterations": 150}},
-  "interaction": {"hover": true, "tooltipDelay": 100, "navigationButtons": true}
-}"""
-
-
 def _display_word_knowledge_graph(word: str, language: str, analysis_data: dict):
-    """Create and display an interactive knowledge graph for the word analysis."""
-    net = Network(height="450px", width="100%", bgcolor="#0E1117", font_color="#FAFAFA")
-    net.barnes_hut()
-    net.set_options(_GRAPH_OPTIONS)
-
-    # Central word node
-    pos = analysis_data.get("pos", "UNKNOWN")
-    net.add_node(
-        "main",
-        label=word,
-        title=f"{word}\n{pos}\nLanguage: {language}",
-        color="#FF6B6B",
-        size=50,
-        font={"size": 20, "color": "#FFFFFF", "bold": True},
-        shape="circle",
-    )
-
-    node_id = 0
-
-    def add_category(cat_id: str, label: str, color: str, items: list[str]):
-        """Add a hub node with child nodes radiating from it."""
-        nonlocal node_id
-        if not items:
-            return
-        hub = f"cat_{cat_id}"
-        net.add_node(
-            hub, label=label, title=label, color=color, size=30, shape="diamond"
-        )
-        net.add_edge("main", hub, color=color, width=3)
-        for item in items[:8]:
-            node_id += 1
-            display = item[:27] + "..." if len(item) > 30 else item
-            net.add_node(
-                f"item_{node_id}",
-                label=display,
-                title=item,
-                color=color,
-                size=20,
-                shape="dot",
-            )
-            net.add_edge(hub, f"item_{node_id}", color=color, width=1)
-
-    # Etymology — special case with sub-nodes for origin & root
-    etym_color = "#9B59B6"
-    if "etymology" in analysis_data:
-        net.add_node(
-            "etymology",
-            label="📜 Etymology",
-            title=analysis_data["etymology"],
-            color=etym_color,
-            size=30,
-            shape="diamond",
-        )
-        net.add_edge("main", "etymology", color=etym_color, width=3)
-        for sub_key, prefix in [("language_origin", "Origin"), ("root", "Root")]:
-            if sub_key in analysis_data:
-                node_id += 1
-                label = (
-                    f"{prefix}: {analysis_data[sub_key]}"
-                    if sub_key == "root"
-                    else analysis_data[sub_key]
-                )
-                net.add_node(
-                    f"{sub_key}_{node_id}",
-                    label=label,
-                    title=f"{prefix}: {analysis_data[sub_key]}",
-                    color=etym_color,
-                    size=20,
-                )
-                net.add_edge("etymology", f"{sub_key}_{node_id}", color=etym_color)
-
-    # Standard categories — uniform loop
-    for key, label, color in _GRAPH_CATEGORIES:
-        items = _format_entries(analysis_data, key)
-        if items:
-            add_category(key, label, color, items)
-
-    # Conjugations — Entries, e.g. {"term": "present", "gloss": "es"}
-    conj = _format_entries(analysis_data, "conjugations", limit=6)
-    if conj:
-        add_category("conjugations", "📝 Conjugations", "#2ECC71", conj)
-
-    # Examples — truncate long strings
-    examples = analysis_data.get("examples", [])
-    if isinstance(examples, list) and examples:
-        short = [ex[:40] + "..." if len(ex) > 40 else ex for ex in examples[:4]]
-        add_category("examples", "💬 Examples", "#1ABC9C", short)
-
-    # Forms — gathered from multiple keys
-    forms = []
-    for fkey, flabel in [
-        ("plural", "Plural"),
-        ("gender", "Gender"),
-        ("infinitive", "Infinitive"),
-        ("verb_type", "Verb type"),
-    ]:
-        val = analysis_data.get(fkey)
-        if val:
-            forms.append(f"{flabel}: {val}")
-    for entries_key in ("gender_forms", "related_forms"):
-        forms.extend(_format_entries(analysis_data, entries_key))
-    if forms:
-        add_category("forms", "📋 Forms", "#4CAF50", forms)
-
-    # Render to HTML
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".html", mode="w") as f:
-        net.save_graph(f.name)
-        temp_path = f.name
-    with open(temp_path, "r", encoding="utf-8") as f:
-        html_content = f.read()
-    os.unlink(temp_path)
+    """Create and display an interactive knowledge graph for the word analysis,
+    with a click-to-select detail panel shown beneath it. This already lives
+    inside display_word_analysis's own two-column layout, so stack rather than
+    nest another side-by-side split."""
+    styled = word_analysis_to_echarts_data(word, language, analysis_data)
+    options = build_graph_echarts_options(styled)
 
     st.info(
-        "💡 **Interactive Graph:** Click and drag nodes to explore. Hover for details. Use mouse wheel to zoom."
+        "💡 **Interactive Graph:** Drag nodes to explore, click for details, "
+        "scroll to zoom."
     )
-    st.components.v1.html(html_content, height=500)
+    result = st_echarts(
+        options=options,
+        events={"click": GRAPH_CLICK_JS},
+        height="450px",
+        key=f"echarts_knowledge_graph_{word}_{language}",
+    )
+    if result:
+        selection = resolve_graph_click(result.get("chart_event"))
+        if selection:
+            st.session_state["graph_selection"] = {**selection, "source": "knowledge"}
+    _render_graph_selection_panel("knowledge")
+
+
+def _render_graph_selection_panel(source: str) -> None:
+    """Render the persistent detail panel for the currently-selected node/edge
+    in one of the three graphs. Scoped to `source` ("semantic" / "cooccurrence" /
+    "knowledge") so switching graphs doesn't show a stale selection from a
+    different one - each graph's raw node/edge shape is different enough
+    (translation-graph node vs. knowledge-graph category hub vs. co-occurrence
+    word, ...) that showing the wrong graph's selection would be misleading,
+    not just cosmetically off.
+    """
+    selection = st.session_state.get("graph_selection")
+    if not selection or selection.get("source") != source:
+        st.caption("Click a node or edge in the graph to see details here.")
+        return
+
+    if selection["kind"] == "edge":
+        _render_edge_selection(selection["data"])
+        return
+
+    data = selection["data"]
+    node_kind = data.get("kind")  # knowledge-graph/co-occurrence nodes tag themselves
+
+    if node_kind in ("category", "etymology", "etymology_detail"):
+        st.markdown(f"**{data.get('label', data.get('text', ''))}**")
+        if data.get("text"):
+            st.write(data["text"])
+        return
+
+    if node_kind == "main":
+        st.markdown(f"**{data['word']}**")
+        st.caption("This is the word already being analyzed.")
+        return
+
+    # A real, analyzable word: a semantic-graph node (id/label/language/pos/
+    # details), a knowledge-graph "item" leaf (word/language/text), or a
+    # co-occurrence word (word/language/degree).
+    word = data.get("word") or data.get("label", "")
+    language = data.get("language", "")
+    st.markdown(f"### {word}")
+    if language:
+        st.caption(LANGUAGE_MAP.get(language, {}).get("name", language))
+    if data.get("pos"):
+        st.markdown(_badge(data["pos"], "#4361EE"), unsafe_allow_html=True)
+    detail_text = data.get("details") or data.get("text")
+    if detail_text:
+        st.write(detail_text)
+    if data.get("degree") is not None:
+        st.caption(f"Co-occurrences: {data['degree']}")
+
+    if word and language:
+        _render_analyze_button(word, language, key=f"panel_analyze_{source}")
+
+    analysis = st.session_state.get("current_word_analysis")
+    if (
+        word
+        and analysis
+        and st.session_state.get("current_word") == word
+        and "error" not in analysis
+    ):
+        display_word_analysis(word, language, analysis)
+
+
+def _render_edge_selection(data: dict) -> None:
+    """Render the panel content for a clicked edge."""
+    kind = data.get("kind")
+    if kind in (
+        "category_edge",
+        "item_edge",
+        "etymology_edge",
+        "etymology_detail_edge",
+    ):
+        st.caption("A connection in the knowledge graph.")
+        return
+    if kind == "cooccurrence_edge":
+        st.markdown(f"**{data['source']} ↔ {data['target']}**")
+        st.caption(f"Co-occurrence count: {data['weight']}")
+        return
+
+    # Semantic-graph edge: from/to/relation/strength/label/description/title
+    relation = data.get("relation", "related").replace("_", " ")
+    st.markdown(f"**{data.get('from', '')} → {data.get('to', '')}**")
+    st.caption(relation)
+    text = data.get("title") or data.get("description")
+    if text:
+        st.write(text)
+    if data.get("strength") is not None:
+        st.caption(f"Strength: {data['strength']:.2f}")
+
+
+def _render_analyze_button(word: str, language: str, *, key: str) -> None:
+    """Render an "Analyze this word" button that runs the same cache-backed LLM
+    analysis the dropdown+button flow uses, writing to the same session-state
+    keys so both paths stay in sync."""
+    if not st.button("🔍 Analyze this word", key=key):
+        return
+    if not st.session_state.get("model_available", False):
+        st.error("⚠️ LLM model not available. Please check the model status above.")
+        return
+    client = get_llm_client()
+    if client is None:
+        st.error("⚠️ Could not create an LLM client. Check the provider settings.")
+        return
+    with st.spinner(f"Analyzing '{word}' using LLM..."):
+        analysis_data = run_async(analyze_selected_word(word, language, client))
+    st.session_state["current_word_analysis"] = analysis_data
+    st.session_state["current_word"] = word
+    st.session_state["current_word_lang"] = language
+    st.rerun()
 
 
 def _show_entries(d: dict, key: str, heading: str):
     """Render an Entries or StrList field as a titled bullet list."""
-    items = _format_entries(d, key)
+    items = format_entries(d, key)
     if not items:
         return
     st.markdown(f"**{heading}:**")
@@ -1911,7 +1436,7 @@ def _show_entries(d: dict, key: str, heading: str):
 
 def _show_examples(d: dict):
     """Render numbered usage examples."""
-    items = _format_entries(d, "examples", limit=5)
+    items = format_entries(d, "examples", limit=5)
     if items:
         st.markdown("**Usage Examples:**")
         for i, ex in enumerate(items, 1):
@@ -1972,7 +1497,7 @@ def _display_generic_analysis(d: dict):
         st.markdown(f"**Definition:** {d['definition']}")
     if "related_words" in d:
         st.markdown("**Related Words:**")
-        for w in _format_entries(d, "related_words"):
+        for w in format_entries(d, "related_words"):
             st.markdown(f"- {w}")
     _show_examples(d)
     if "grammar_notes" in d:
@@ -2691,10 +2216,9 @@ def _render_graph_visualization_tabs() -> None:
                 # Interactive Word Analysis Section
                 st.markdown("### 🔍 Interactive Word Analysis")
                 st.markdown(
-                    "**Click on any word in the graph below to see detailed linguistic analysis!**"
-                )
-                st.info(
-                    "💡 **Tip**: Hover over nodes to see basic info, click to get full LLM-powered analysis."
+                    "**Click any word or connection in the graph to see it in the "
+                    "panel on the right** — from there you can run full LLM word "
+                    "analysis."
                 )
 
                 # Display controls for the graph
@@ -2971,8 +2495,7 @@ def _render_graph_visualization_tabs() -> None:
 
                 # Display the co-occurrence network
                 graph = st.session_state["cooccurrence_graphs"][selected_lang]
-                html_string = visualize_cooccurrence_network(graph, selected_lang)
-                st.components.v1.html(html_string, height=400)
+                visualize_cooccurrence_network(graph, selected_lang)
 
                 # Show network stats
                 import networkx as nx
@@ -3303,6 +2826,7 @@ def main():
         "current_word": None,
         "current_word_lang": None,
         "help_dismissed": False,
+        "graph_selection": None,
     }
     for key, value in default_session_state.items():
         st.session_state.setdefault(key, value)

@@ -1,54 +1,19 @@
 """
 Tests for the word-analysis display layer in idiomapp/streamlit/app.py.
 
-Two tiers:
+`streamlit.testing.v1.AppTest`-based tests for `display_word_analysis` and its
+tab renderers - Streamlit's official headless test harness. Importing
+`display_word_analysis` from `idiomapp.streamlit.app` does not run `main()`:
+Streamlit only executes a script's `if __name__ == "__main__"` block when that
+script is the actual run target, which a plain import does not set - so this
+never touches Ollama, spaCy, or any network/session-dependent code, confirmed
+empirically to run in ~3s.
 
-* Plain pytest unit tests for `_format_entry`/`_format_entries` - pure functions,
-  no Streamlit runtime needed.
-* `streamlit.testing.v1.AppTest`-based tests for `display_word_analysis` and its
-  tab renderers - Streamlit's official headless test harness. Importing
-  `display_word_analysis` from `idiomapp.streamlit.app` does not run `main()`:
-  Streamlit only executes a script's `if __name__ == "__main__"` block when that
-  script is the actual run target, which a plain import does not set - so this
-  never touches Ollama, spaCy, or any network/session-dependent code, confirmed
-  empirically to run in ~3s.
+(`_format_entry`/`_format_entries` moved to `idiomapp.utils.graph_viz` and are
+covered by `tests/test_graph_viz.py` now.)
 """
 
 from streamlit.testing.v1 import AppTest
-
-from idiomapp.streamlit.app import _format_entry, _format_entries
-
-
-# --------------------------------------------------------------------------
-# Pure formatting helpers - no Streamlit runtime
-# --------------------------------------------------------------------------
-def test_format_entry_with_gloss():
-    assert _format_entry({"term": "gato", "gloss": "cat"}) == "gato: cat"
-
-
-def test_format_entry_without_gloss():
-    assert _format_entry({"term": "gato", "gloss": None}) == "gato"
-
-
-def test_format_entry_plain_value():
-    assert _format_entry("gato") == "gato"
-
-
-def test_format_entries_missing_key_is_empty():
-    assert _format_entries({}, "synonyms") == []
-
-
-def test_format_entries_truncates_at_limit():
-    data = {"synonyms": [{"term": str(i), "gloss": None} for i in range(10)]}
-    assert len(_format_entries(data, "synonyms", limit=3)) == 3
-
-
-def test_format_entries_renders_str_list_field():
-    data = {"examples": ["Ella habla español.", "¿Hablas inglés?"]}
-    assert _format_entries(data, "examples") == [
-        "Ella habla español.",
-        "¿Hablas inglés?",
-    ]
 
 
 # --------------------------------------------------------------------------
@@ -120,12 +85,22 @@ def test_no_data_shows_info_message_not_empty_tabs():
     assert any("No detailed data available" in i.value for i in at.info)
 
 
-def test_knowledge_graph_renders_an_iframe_containing_the_word():
+def test_knowledge_graph_renders_an_echarts_component_containing_the_word():
+    """The knowledge graph renders via st_echarts, a components.v2 widget - AppTest
+    surfaces it as a "bidi_component" node whose proto.json is the full ECharts
+    `options` payload (confirmed empirically), not an iframe/srcdoc like the old
+    pyvis embed. component_name pins that it's genuinely the echarts component,
+    not some other bidi component elsewhere on the page."""
     at = _run(RICH_ANALYSIS)
     assert not at.exception
-    iframes = [n for n in at.main if n.type == "iframe"]
-    assert iframes
-    assert "hablar" in iframes[0].proto.srcdoc
+    echarts_nodes = [
+        n
+        for n in at.main
+        if n.type == "bidi_component"
+        and n.proto.component_name == "streamlit-echarts.streamlit_echarts"
+    ]
+    assert echarts_nodes
+    assert "hablar" in echarts_nodes[0].proto.json
 
 
 def test_knowledge_graph_includes_conjugations_and_related_forms():
@@ -134,10 +109,10 @@ def test_knowledge_graph_includes_conjugations_and_related_forms():
     always a list post-schema); now they should actually appear."""
     at = _run(RICH_ANALYSIS)
     assert not at.exception
-    iframes = [n for n in at.main if n.type == "iframe"]
-    srcdoc = iframes[0].proto.srcdoc
-    assert "Conjugations" in srcdoc
-    assert "Forms" in srcdoc
+    echarts_nodes = [n for n in at.main if n.type == "bidi_component"]
+    payload = echarts_nodes[0].proto.json
+    assert "Conjugations" in payload
+    assert "Forms" in payload
 
 
 def test_grammar_tab_renders_for_verb_without_exception():
