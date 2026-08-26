@@ -13,9 +13,19 @@ Natural Language Processing utilities based on [textacy](https://textacy.readthe
 - `calculate_similarity`: Calculate string similarity between words
 - `calculate_word_similarity`: Calculate similarity between words in different languages
 - `build_word_cooccurrence_network`: Build co-occurrence networks using textacy
-- `visualize_cooccurrence_network`: Visualize networks using pyvis
 - `detect_language`: Detect the language of a text
 - `get_network_stats`: Calculate various network statistics
+
+### `graph_viz.py`
+
+Adapters that turn this app's graph data into ECharts graph-series options
+(rendered via `streamlit-echarts`), plus the click-event resolver that makes a
+node/edge click round-trip back into Python:
+
+- `semantic_graph_to_echarts_data` / `cooccurrence_graph_to_echarts_data` /
+  `word_analysis_to_echarts_data`: per-source adapters that style nodes/edges
+- `build_graph_echarts_options`: the shared, purely-mechanical ECharts assembly
+- `resolve_graph_click`: turn a raw click event back into `{"kind", "data"}`
 
 ### `audio_utils.py`
 
@@ -87,7 +97,7 @@ from idiomapp.utils.logging_utils import get_logger
 - textacy
 - spaCy
 - networkx
-- pyvis
+- streamlit-echarts
 - gTTS (Google Text-to-Speech)
 - langdetect
 - openai
