@@ -1080,3 +1080,6 @@ The application now provides:
 - **Advanced Analytics**: Learning progress tracking and vocabulary building insights
 - **Mobile Responsive Design**: Optimize layout for smaller screens
 - **Accessibility Improvements**: Screen reader support, keyboard navigation
+- **`prompt_example()` doesn't illustrate `list[BaseModel]` fields well**: it renders them as a one-item list containing the field's description string, not a real nested example - already affects every `Entries`-typed field on `WordAnalysis` (cognates, idioms, conjugations, ...) for Ollama/OpenAI, which only ever see prompt text, never the real schema
+- **Ollama/OpenAI structured output is prompt-only, never schema-constrained**: only the Anthropic client sends a real schema (`messages.parse(..., output_format=schema)`); Ollama/OpenAI rely on JSON-mode + prompt text, so any feature needing a specific nested shape (e.g. translation word-alignment) is Claude-reliable and best-effort elsewhere
+- **`process_related_words`/`_RELATION_STRENGTHS` is effectively dead code**: a hardcoded synonym/antonym lookup covering exactly 6 words total across all 3 languages, returns `[]` for everything else - either build it out with a real data source or remove it

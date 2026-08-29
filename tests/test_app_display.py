@@ -399,3 +399,52 @@ st.write("no crash, no rerun loop")
     at.run(timeout=30)
     assert not at.exception
     assert any("no crash" in e.value for e in at.get("markdown"))
+
+
+# --------------------------------------------------------------------------
+# _filter_edges - the Semantic Graph's strength + relationship-kind filter
+# --------------------------------------------------------------------------
+_FILTER_EDGES_SCRIPT = """
+import streamlit as st
+from idiomapp.streamlit.app import _filter_edges
+
+edges = [
+    {{"relation": "translation", "strength": 1.0}},
+    {{"relation": "cognate", "strength": 0.6}},
+    {{"relation": "cross_sentence", "strength": 0.4}},
+]
+st.session_state["result"] = _filter_edges(edges, {min_strength}, {selected_kinds!r})
+"""
+
+
+def _run_filter_edges(min_strength: float, selected_kinds) -> list:
+    at = AppTest.from_string(
+        _FILTER_EDGES_SCRIPT.format(
+            min_strength=min_strength, selected_kinds=selected_kinds
+        )
+    )
+    at.run(timeout=30)
+    assert not at.exception
+    return at.session_state["result"]
+
+
+def test_filter_edges_keeps_everything_by_default():
+    result = _run_filter_edges(0.0, ["translation", "cognate", "cross_sentence"])
+    assert len(result) == 3
+
+
+def test_filter_edges_strength_threshold_excludes_weaker_edges():
+    result = _run_filter_edges(0.5, ["translation", "cognate", "cross_sentence"])
+    assert {e["relation"] for e in result} == {"translation", "cognate"}
+
+
+def test_filter_edges_kind_selection_excludes_deselected_kinds():
+    result = _run_filter_edges(0.0, ["translation"])
+    assert len(result) == 1
+    assert result[0]["relation"] == "translation"
+
+
+def test_filter_edges_strength_and_kind_combine():
+    result = _run_filter_edges(0.5, ["cognate"])
+    assert len(result) == 1
+    assert result[0]["relation"] == "cognate"

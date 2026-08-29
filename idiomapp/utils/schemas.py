@@ -370,9 +370,70 @@ class WordAnalysis(BaseModel):
         return {k: v for k, v in data.items() if v not in (None, [], {}, "")}
 
 
+class AlignmentPair(BaseModel):
+    """One source word matched to the target word it translates to."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    source_word: str
+    target_word: str
+
+
+def _to_alignment_pairs(value: Any) -> Any:
+    """
+    Normalise word alignment into a list of {source_word, target_word} dicts.
+
+    Accepts the intended shape (a list of {"source_word", "target_word"} dicts),
+    a plain {source: target} mapping, or a list of "source -> target" /
+    "source: target" strings - whatever a provider that only saw prompt text
+    (not the real schema) is likely to return. Anything unparseable is dropped
+    rather than raised, matching this module's tolerant-on-input rule: a
+    provider that can't produce alignment just yields no translation edges.
+    """
+    if value is None:
+        return []
+    if isinstance(value, dict):
+        return [
+            {"source_word": str(k), "target_word": str(v)} for k, v in value.items()
+        ]
+    if not isinstance(value, list):
+        return []
+
+    pairs = []
+    for item in value:
+        if isinstance(item, dict) and "source_word" in item and "target_word" in item:
+            pairs.append(item)
+        elif isinstance(item, dict) and len(item) == 1:
+            ((k, v),) = item.items()
+            pairs.append({"source_word": str(k), "target_word": str(v)})
+        elif isinstance(item, str):
+            for sep in (" -> ", "->", ":", "="):
+                if sep in item:
+                    source, _, target = item.partition(sep)
+                    pairs.append(
+                        {"source_word": source.strip(), "target_word": target.strip()}
+                    )
+                    break
+    return pairs
+
+
+# Word-level translation alignment: tolerant on input for the same reason
+# Entries/StrList are - Ollama and OpenAI only ever see this as prompt text,
+# never the real schema, so they may return a looser shape than intended.
+AlignmentPairs = Annotated[list[AlignmentPair], BeforeValidator(_to_alignment_pairs)]
+
+
 class Translation(BaseModel):
     """Schema for a single translation response."""
 
     model_config = ConfigDict(extra="ignore")
 
     translation: str = Field(description="The translated text")
+    alignment: AlignmentPairs = Field(
+        default_factory=list,
+        description=(
+            "Each content word in the translation paired with the source word "
+            'it translates - e.g. {"source_word": "moon", "target_word": '
+            '"luna"}. Skip function words with no clear one-to-one match.'
+        ),
+    )

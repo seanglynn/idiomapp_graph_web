@@ -2,6 +2,8 @@ import os
 import re
 import asyncio
 import html
+from dataclasses import dataclass, field
+from typing import Optional
 
 # Third-party imports
 import streamlit as st
@@ -14,7 +16,7 @@ from idiomapp.utils.llm_utils import (
 )
 from idiomapp.utils.ollama_utils import get_available_models
 from idiomapp.utils.async_utils import run_async
-from idiomapp.utils.schemas import Translation
+from idiomapp.utils.schemas import AlignmentPair, Translation
 from idiomapp.utils.state_utils import get_llm_client, get_provider_credentials
 from idiomapp.utils.logging_utils import get_logger, get_recent_logs, clear_logs
 from idiomapp.utils.graph_storage import get_graph_storage
@@ -730,13 +732,29 @@ def display_translation_error(error_message: str, target_lang: str):
     st.error(f"{lang_name} {flag}: {error_message}")
 
 
-async def translate_text(client, source_text, source_lang, target_lang):
+@dataclass(frozen=True, slots=True)
+class TranslationResult:
+    """A translated segment of text, plus any word-level alignment the LLM
+    reported. `error` is set instead of `text` when translation failed -
+    callers check that rather than sniffing `text` for an "Error:" prefix."""
+
+    text: str = ""
+    alignment: list[AlignmentPair] = field(default_factory=list)
+    error: Optional[str] = None
+
+
+async def translate_text(
+    client, source_text, source_lang, target_lang
+) -> TranslationResult:
     """
     Translate text using the LLM client.
 
     Every provider implements generate_json, so there is one path here rather than
-    a per-provider branch. Providers that support schema-constrained output use the
-    Translation model; the rest fall back to tolerant parsing inside the client.
+    a per-provider branch. Only Claude's client actually validates its response
+    against `schema` internally (see llm_utils.py); Ollama/OpenAI return raw
+    parsed JSON, so the result is re-validated through `Translation` here for
+    every provider alike - that's also what makes `Translation.alignment`'s
+    tolerant parsing (schemas.py's `_to_alignment_pairs`) actually run.
 
     Args:
         client: The LLM client (Ollama, OpenAI or Anthropic)
@@ -745,7 +763,7 @@ async def translate_text(client, source_text, source_lang, target_lang):
         target_lang: Target language code
 
     Returns:
-        Translated text, or an "Error: ..." string
+        A TranslationResult - `.text`/`.alignment` on success, `.error` on failure.
     """
     logger.info(f"Translating from {source_lang} to {target_lang}: {source_text}")
 
@@ -754,8 +772,10 @@ async def translate_text(client, source_text, source_lang, target_lang):
 
     system_prompt = (
         f"You are a professional translator. Translate text from {source_name} to "
-        f'{target_name}. Return ONLY a JSON object with a single key "translation" '
-        f"containing the translated text. Preserve the original formatting "
+        f'{target_name}. Return ONLY a JSON object with keys "translation" (the '
+        f'translated text) and "alignment" (a list of {{"source_word": ..., '
+        f'"target_word": ...}} pairs, one per content word - skip function words '
+        f"with no clear one-to-one match). Preserve the original formatting "
         f"(line breaks, punctuation)."
     )
 
@@ -763,7 +783,7 @@ async def translate_text(client, source_text, source_lang, target_lang):
 
 {source_text}
 
-Return JSON: {{"translation": "your translation here"}}"""
+Return JSON: {{"translation": "your translation here", "alignment": [{{"source_word": "...", "target_word": "..."}}]}}"""
 
     try:
         result = await client.generate_json(
@@ -773,22 +793,24 @@ Return JSON: {{"translation": "your translation here"}}"""
         if "error" in result:
             logger.error(f"Translation error: {result['error']}")
             error = result["error"]
-            return error if str(error).startswith("Error:") else f"Error: {error}"
+            message = error if str(error).startswith("Error:") else f"Error: {error}"
+            return TranslationResult(error=message)
 
-        translation = (result.get("translation") or "").strip()
+        parsed = Translation.model_validate(result)
+        translation = parsed.translation.strip()
         if not translation:
             logger.error("Empty translation in response")
-            return "Error: Empty translation received"
+            return TranslationResult(error="Error: Empty translation received")
 
         logger.info(f"Translation result: {translation[:100]}...")
-        return translation
+        return TranslationResult(text=translation, alignment=parsed.alignment)
 
     except Exception as e:
         logger.error(f"Translation error: {str(e)}")
-        return f"Error: {str(e)}"
+        return TranslationResult(error=f"Error: {str(e)}")
 
 
-async def analyze_translation(source_text, target_texts, target_langs):
+async def analyze_translation(source_text, target_texts, target_langs, alignments=None):
     """
     Analyze translation and generate graph with related words.
 
@@ -796,6 +818,11 @@ async def analyze_translation(source_text, target_texts, target_langs):
         source_text: Source text to translate
         target_texts: List of translations
         target_langs: List of target languages
+        alignments: Optional list of AlignmentPair lists, one per target_lang
+            (same order/length as target_texts) - see TranslationResult.
+            Covers the whole translated text, not per-sentence; scoped down to
+            each sentence pair automatically, since a pair only ever matches
+            words that sentence actually contains.
 
     Returns:
         Dictionary with nodes and edges for the graph
@@ -825,6 +852,15 @@ async def analyze_translation(source_text, target_texts, target_langs):
     for lang, text in zip(target_langs, target_texts):
         target_sentences_by_lang[lang] = split_into_sentences(text)
 
+    # One lowercased (source_word, target_word) lookup set per language, built
+    # once - process_sentence_pair's existing per-word-pair loop naturally
+    # scopes this to whichever words a given sentence pair actually contains.
+    alignment_pairs_by_lang = {}
+    for lang, pairs in zip(target_langs, alignments or []):
+        alignment_pairs_by_lang[lang] = frozenset(
+            (pair.source_word.lower(), pair.target_word.lower()) for pair in pairs
+        )
+
     # Set of nodes already added to avoid duplicates
     added_nodes = set()
     # Cache for word relations to avoid redundant API calls
@@ -848,6 +884,7 @@ async def analyze_translation(source_text, target_texts, target_langs):
                     added_nodes,
                     word_relations_cache,
                     sentence_group,
+                    alignment_pairs_by_lang.get(lang, frozenset()),
                 )
 
     # Add cross-sentence relationships if multiple sentences
@@ -2317,6 +2354,25 @@ def _render_translation_panel(
     return source_text, translate_button
 
 
+def _filter_edges(edges: list, min_strength: float, selected_kinds) -> list:
+    """Keep only edges at/above min_strength and whose relation is selected."""
+    return [
+        edge
+        for edge in edges
+        if edge.get("strength", 1.0) >= min_strength
+        and edge.get("relation", "related") in selected_kinds
+    ]
+
+
+# Friendly labels for the relation-kind filter; anything not listed here falls
+# back to a title-cased version of its raw relation string.
+_RELATION_KIND_LABELS = {
+    "translation": "🔤 Translation",
+    "cognate": "🌍 Cognate",
+    "cross_sentence": "📝 Same sentence",
+}
+
+
 def _render_graph_visualization_tabs() -> None:
     """Render the Semantic Graph / Co-occurrence Network tabs, including the
     word-selection and word-analysis UI nested inside the semantic graph tab."""
@@ -2344,7 +2400,27 @@ def _render_graph_visualization_tabs() -> None:
                 # Display controls for the graph
                 available_langs = list(st.session_state["graph_data"].keys())
                 merge_graphs = True  # Default to merged view
-                min_strength = 0.5  # Default strength
+                # Cross-language scores usually land well under 0.5, even for
+                # correct direct translations - a 0.5 default hid nearly everything.
+                min_strength = 0.0  # Default: show every relationship that was found
+
+                # Peek at every relation kind that could actually appear, so the
+                # kind filter's options match reality instead of a hardcoded
+                # guess. Merging only adds edges (never removes any), so the
+                # merged graph's kinds are a superset of any single-language
+                # view's - cheap and safe to compute even when merging is off.
+                if len(available_langs) > 1:
+                    preview_edges = merge_language_graphs(
+                        st.session_state["graph_data"]
+                    )["edges"]
+                else:
+                    preview_edges = next(iter(st.session_state["graph_data"].values()))[
+                        "edges"
+                    ]
+                available_kinds = sorted(
+                    {edge.get("relation", "related") for edge in preview_edges}
+                )
+                selected_kinds = available_kinds
 
                 with st.expander("Graph Options", expanded=False):
                     # Create columns for options
@@ -2364,25 +2440,38 @@ def _render_graph_visualization_tabs() -> None:
                             "Minimum relationship strength",
                             min_value=0.0,
                             max_value=1.0,
-                            value=0.5,
+                            value=0.0,
                             step=0.1,
-                            help="Only show strong relationships above this threshold",
+                            help=(
+                                "Hide relationships weaker than this. Cross-language "
+                                "word-pair scores are often well under 0.5, even for "
+                                "correct direct translations - start at 0 to see "
+                                "everything, then raise it to declutter."
+                            ),
                         )
+
+                    selected_kinds = st.multiselect(
+                        "Relationship types to show",
+                        options=available_kinds,
+                        default=available_kinds,
+                        format_func=lambda k: _RELATION_KIND_LABELS.get(
+                            k, k.replace("_", " ").title()
+                        ),
+                        help=(
+                            "Each relationship type comes from a different signal - "
+                            "Translation is LLM-reported, Cognate is a look-alike "
+                            "heuristic. Deselect a type to hide it everywhere below."
+                        ),
+                    )
 
                 # Display the graph based on selection
 
                 if merge_graphs and len(available_langs) > 1:
                     # Create a merged graph with cross-language connections
                     merged_graph = merge_language_graphs(st.session_state["graph_data"])
-
-                    # Filter edges by strength
-                    if min_strength > 0:
-                        filtered_edges = [
-                            edge
-                            for edge in merged_graph["edges"]
-                            if edge.get("strength", 1.0) >= min_strength
-                        ]
-                        merged_graph["edges"] = filtered_edges
+                    merged_graph["edges"] = _filter_edges(
+                        merged_graph["edges"], min_strength, selected_kinds
+                    )
 
                     st.markdown(
                         f"**Combined graph showing relationships between {', '.join(available_langs)}**"
@@ -2396,21 +2485,14 @@ def _render_graph_visualization_tabs() -> None:
                         format_func=get_language_display,
                     )
 
-                    # Filter edges by strength if needed
                     graph_data = st.session_state["graph_data"][selected_lang]
-                    if min_strength > 0:
-                        filtered_edges = [
-                            edge
-                            for edge in graph_data["edges"]
-                            if edge.get("strength", 1.0) >= min_strength
-                        ]
-                        # Create a copy of the graph with filtered edges
-                        filtered_graph = {
-                            "nodes": graph_data["nodes"],
-                            "edges": filtered_edges,
-                            "metadata": graph_data.get("metadata", {}),
-                        }
-                        graph_data = filtered_graph
+                    graph_data = {
+                        "nodes": graph_data["nodes"],
+                        "edges": _filter_edges(
+                            graph_data["edges"], min_strength, selected_kinds
+                        ),
+                        "metadata": graph_data.get("metadata", {}),
+                    }
 
                     # Display the selected graph
                     st.markdown(
@@ -2431,18 +2513,14 @@ def _render_graph_visualization_tabs() -> None:
 
                 with legend_col2:
                     st.markdown("#### Edge Types")
-                    st.markdown("⚪ **White** - Direct translation")
-                    st.markdown("🔶 **Gold** - Cognates (similar words)")
-                    st.markdown("🔹 **Teal** - Semantic equivalents")
+                    st.markdown("⚪ **White** - Translation (LLM-reported)")
+                    st.markdown("🔶 **Gold dashed** - Cognate (looks alike)")
                     st.markdown("🟢 **Green** - Synonyms")
                     st.markdown("🔴 **Red** - Antonyms")
                     st.markdown("🟠 **Orange** - Hypernyms (broader terms)")
                     st.markdown("🟡 **Yellow** - Hyponyms (specific terms)")
                     st.markdown("🔵 **Cyan** - Contextual relation")
                     st.markdown("🟣 **Purple dashed** - Cross-sentence relation")
-                    st.markdown("🟠 **Orange dashed** - Cross-language similarity")
-                    st.markdown("🔷 **Light blue** - Common prefix")
-                    st.markdown("🔮 **Light purple** - Common suffix")
 
                 with legend_col3:
                     st.markdown("#### Word Types")
@@ -2715,25 +2793,24 @@ def _handle_translate_button(
 
                 results = run_async(translate_all())
 
-                for target_lang, translation in zip(target_langs, results):
-                    if isinstance(translation, Exception):
-                        logger.error(
-                            f"Translation raised for {target_lang}: {translation}"
-                        )
-                        translation_errors[target_lang] = str(translation)
+                for target_lang, result in zip(target_langs, results):
+                    if isinstance(result, Exception):
+                        logger.error(f"Translation raised for {target_lang}: {result}")
+                        translation_errors[target_lang] = str(result)
                         continue
 
-                    if translation.startswith("Error:") or "Error code:" in translation:
+                    if result.error or "Error code:" in result.text:
+                        message = result.error or result.text
                         error_message = handle_translation_error(
-                            translation, source_lang, target_lang
+                            message, source_lang, target_lang
                         )
                         translation_errors[target_lang] = error_message
                         logger.warning(
-                            f"Translation failed for {target_lang}: {translation}"
+                            f"Translation failed for {target_lang}: {message}"
                         )
                         continue
 
-                    successful_translations[target_lang] = translation
+                    successful_translations[target_lang] = result
 
                 # Spanish and Catalan are close enough that a model occasionally
                 # returns them the wrong way round. Checked once, after all
@@ -2769,8 +2846,8 @@ def _handle_translate_button(
                             1 for marker in markers if f" {marker} " in f" {text} "
                         )
 
-                    es_text = successful_translations["es"]
-                    ca_text = successful_translations["ca"]
+                    es_text = successful_translations["es"].text
+                    ca_text = successful_translations["ca"].text
 
                     if count_markers(catalan_markers, es_text) > count_markers(
                         spanish_markers, es_text
@@ -2780,9 +2857,12 @@ def _handle_translate_button(
                         logger.warning(
                             "Detected possible language mismatch. Swapping Spanish and Catalan translations."
                         )
+                        # Swap the whole result, not just the text - the alignment
+                        # data was computed alongside whichever text it came with,
+                        # so it's mislabeled the same way and needs to move with it.
                         successful_translations["es"], successful_translations["ca"] = (
-                            ca_text,
-                            es_text,
+                            successful_translations["ca"],
+                            successful_translations["es"],
                         )
 
                 # Read the co-occurrence settings once rather than per language.
@@ -2792,10 +2872,10 @@ def _handle_translate_button(
                     "selected_pos", ["NOUN", "VERB", "ADJ"]
                 )
 
-                for target_lang, translation in successful_translations.items():
+                for target_lang, result in successful_translations.items():
                     # Add each translation as a separate message
                     translation_content = (
-                        f"{get_language_display(target_lang)}: {translation.strip()}"
+                        f"{get_language_display(target_lang)}: {result.text.strip()}"
                     )
                     st.session_state["chat_history"].append(
                         {
@@ -2807,7 +2887,12 @@ def _handle_translate_button(
 
                     # Generate the graph data for this language (spaCy, no network I/O)
                     all_graph_data[target_lang] = run_async(
-                        analyze_translation(source_text, [translation], [target_lang])
+                        analyze_translation(
+                            source_text,
+                            [result.text],
+                            [target_lang],
+                            [result.alignment],
+                        )
                     )
 
                     # Source text co-occurrence - only needs building once
@@ -2834,10 +2919,10 @@ def _handle_translate_button(
 
                     # Target text co-occurrence
                     logger.info(
-                        f"Building co-occurrence network for {target_lang} with {len(translation.split())} words"
+                        f"Building co-occurrence network for {target_lang} with {len(result.text.split())} words"
                     )
                     target_cooccurrence = build_word_cooccurrence_network(
-                        translation,
+                        result.text,
                         target_lang,
                         window_size=window_size,
                         min_freq=min_freq,
@@ -2887,9 +2972,11 @@ def _handle_translate_button(
                                     model_used=st.session_state.get(
                                         "llm_provider", "unknown"
                                     ),
-                                    translation_text=successful_translations.get(
-                                        target_lang, ""
-                                    ),
+                                    translation_text=successful_translations[
+                                        target_lang
+                                    ].text
+                                    if target_lang in successful_translations
+                                    else "",
                                 )
                                 logger.info(
                                     f"Stored graph {graph_id} for {target_lang}"

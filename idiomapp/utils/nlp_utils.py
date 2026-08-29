@@ -517,181 +517,38 @@ def calculate_similarity(word1: str, word2: str) -> float:
     return similarity
 
 
-def calculate_word_similarity(word1: str, word2: str, lang1: str, lang2: str) -> dict:
+def detect_cognate(word1: str, word2: str) -> Optional[float]:
     """
-    Calculate similarity between two words in different languages using NLP techniques.
-    Provides rich information about the relationship between words.
+    Check whether two words look like cognates - words that share a common
+    etymology and so look alike across languages (e.g. "nation"/"nación").
 
-    Args:
-        word1: First word
-        word2: Second word
-        lang1: Language of the first word
-        lang2: Language of the second word
+    Reliable only for what it actually measures - visual/etymological
+    similarity - not for "this is the correct translation of that word": a
+    lexically different but correct translation (e.g. "moon"/"luna") won't be
+    caught here, and that's by design; see `process_sentence_pair`'s
+    `alignment_pairs` for the LLM-provided signal that does catch that case.
 
     Returns:
-        Dictionary containing similarity score and relationship information
+        A confidence in [0.6, 0.9] if the words look like cognates, else None.
     """
-    try:
-        # Create a cache key for this word pair
-        cache_key = f"{word1}_{lang1}_{word2}_{lang2}"
+    if len(word1) <= 3 or len(word2) <= 3:
+        return None
 
-        # Check if we have a cached result
-        if (
-            hasattr(calculate_word_similarity, "cache")
-            and cache_key in calculate_word_similarity.cache
-        ):
-            return calculate_word_similarity.cache[cache_key]
+    from textdistance import levenshtein
 
-        # Initialize cache if doesn't exist yet
-        if not hasattr(calculate_word_similarity, "cache"):
-            calculate_word_similarity.cache = {}
+    w1, w2 = word1.lower(), word2.lower()
+    prefix_match = w1[:3] == w2[:3]
+    suffix_match = w1[-3:] == w2[-3:]
 
-        # For same language, use vector similarity
-        if lang1 == lang2:
-            return _calculate_same_language_similarity(word1, word2, lang1)
-
-        # Load spaCy models for both languages
-        try:
-            nlp1 = load_spacy_model(lang1)
-            nlp2 = load_spacy_model(lang2)
-
-            # Process the words to get tokens
-            doc1 = nlp1(word1.lower())
-            doc2 = nlp2(word2.lower())
-
-            # Get the tokens (use first token if multiple)
-            token1 = doc1[0] if len(doc1) > 0 else None
-            token2 = doc2[0] if len(doc2) > 0 else None
-
-            if token1 is None or token2 is None:
-                # Fallback to string similarity if tokens not available
-                return _calculate_fallback_similarity(word1, word2, lang1, lang2)
-
-            # Extract linguistic features
-            lemma1 = token1.lemma_
-            lemma2 = token2.lemma_
-            pos1 = token1.pos_
-            pos2 = token2.pos_
-
-            # Calculate string similarity measures
-            # Normalized edit distance (Levenshtein)
-            from textdistance import levenshtein
-
-            edit_distance = levenshtein.normalized_similarity(
-                word1.lower(), word2.lower()
-            )
-
-            # Calculate character overlap (Jaccard similarity)
-            common_chars = set(word1.lower()) & set(word2.lower())
-            char_overlap = len(common_chars) / (
-                len(set(word1.lower()) | set(word2.lower()))
-            )
-
-            # Check for cognates (words that look similar across languages)
-            is_cognate = False
-            cognate_confidence = 0.0
-
-            # Cognate detection rules based on common patterns between language pairs
-            if len(word1) > 3 and len(word2) > 3:
-                # Common prefix
-                prefix_match = word1.lower()[:3] == word2.lower()[:3]
-                # Common suffix
-                suffix_match = word1.lower()[-3:] == word2.lower()[-3:]
-
-                if prefix_match and suffix_match:
-                    is_cognate = True
-                    cognate_confidence = 0.9
-                elif prefix_match:
-                    is_cognate = True
-                    cognate_confidence = 0.7
-                elif suffix_match:
-                    is_cognate = True
-                    cognate_confidence = 0.6
-                elif edit_distance > 0.7:  # High string similarity
-                    is_cognate = True
-                    cognate_confidence = 0.8
-
-            # Apply language pair specific boosting
-            language_pair_boost = {
-                ("en", "es"): 0.1,  # English-Spanish
-                ("es", "en"): 0.1,
-                ("en", "ca"): 0.05,  # English-Catalan
-                ("ca", "en"): 0.05,
-                ("es", "ca"): 0.2,  # Spanish-Catalan (very similar)
-                ("ca", "es"): 0.2,
-            }
-
-            # Calculate the base similarity score
-            pos_match = pos1 == pos2
-
-            # Apply adjustments based on linguistic features
-            base_similarity = (
-                (edit_distance * 0.4)
-                + (char_overlap * 0.3)
-                + (0.1 if pos_match else 0)
-                + language_pair_boost.get((lang1, lang2), 0)
-            )
-
-            # Determine relationship type
-            if is_cognate:
-                relationship_type = "cognate"
-                confidence = cognate_confidence
-                description = f"Cognate words that share common etymology ({cognate_confidence:.1f})"
-            elif edit_distance > 0.8:
-                relationship_type = "direct_translation"
-                confidence = edit_distance
-                description = f"Direct translation equivalent ({edit_distance:.2f})"
-            elif pos_match and base_similarity > 0.4:
-                relationship_type = "semantic_equivalent"
-                confidence = base_similarity
-                description = f"Semantic equivalent ({base_similarity:.2f})"
-            elif base_similarity > 0.3:
-                relationship_type = "related_term"
-                confidence = base_similarity
-                description = f"Related term ({base_similarity:.2f})"
-            else:
-                relationship_type = "weak_relation"
-                confidence = base_similarity
-                description = f"Weak relation ({base_similarity:.2f})"
-
-            # Structure detailed similarity information
-            similarity_info = {
-                "score": min(1.0, base_similarity),  # Cap at 1.0
-                "relationship_type": relationship_type,
-                "confidence": confidence,
-                "description": description,
-                "linguistic_features": {
-                    "pos_match": pos_match,
-                    "pos1": pos1,
-                    "pos2": pos2,
-                    "lemma1": lemma1,
-                    "lemma2": lemma2,
-                    "edit_distance": edit_distance,
-                    "char_overlap": char_overlap,
-                    "is_cognate": is_cognate,
-                },
-            }
-
-            # Cache the result
-            calculate_word_similarity.cache[cache_key] = similarity_info
-            return similarity_info
-
-        except Exception as e:
-            logger.error(f"Error in advanced word similarity: {str(e)}")
-            # Fall back to the basic similarity if there's an error
-            return _calculate_fallback_similarity(word1, word2, lang1, lang2)
-    except Exception as e:
-        # If any unexpected error occurs, return a default dictionary
-        logger.error(
-            f"Critical error in calculate_word_similarity for {word1}/{word2}: {str(e)}"
-        )
-        return {
-            "score": 0.0,
-            "relationship_type": "error",
-            "confidence": 0.0,
-            "description": f"Error calculating similarity: {str(e)}",
-            "linguistic_features": {},
-        }
+    if prefix_match and suffix_match:
+        return 0.9
+    if prefix_match:
+        return 0.7
+    if suffix_match:
+        return 0.6
+    if levenshtein.normalized_similarity(w1, w2) > 0.7:
+        return 0.8
+    return None
 
 
 def _calculate_same_language_similarity(word1: str, word2: str, language: str) -> dict:
@@ -794,78 +651,6 @@ def _calculate_same_language_similarity(word1: str, word2: str, language: str) -
         }
 
 
-def _calculate_fallback_similarity(
-    word1: str, word2: str, lang1: str, lang2: str
-) -> dict:
-    """Fallback similarity calculation when NLP methods fail"""
-    # Convert to lower case for comparison
-    word1 = word1.lower()
-    word2 = word2.lower()
-
-    # Common prefixes or character patterns between languages
-    if len(word1) > 2 and len(word2) > 2:
-        # Check for common prefix (first 3 characters)
-        if word1[:3] == word2[:3]:
-            return {
-                "score": 0.7,
-                "relationship_type": "common_prefix",
-                "confidence": 0.7,
-                "description": "Common prefix suggests possible relation",
-                "linguistic_features": {"common_prefix": word1[:3]},
-            }
-
-        # Check for common suffix (last 3 characters)
-        if word1[-3:] == word2[-3:]:
-            return {
-                "score": 0.6,
-                "relationship_type": "common_suffix",
-                "confidence": 0.6,
-                "description": "Common suffix suggests possible relation",
-                "linguistic_features": {"common_suffix": word1[-3:]},
-            }
-
-    # Count common characters
-    common_chars = set(word1) & set(word2)
-    if not common_chars:
-        return {
-            "score": 0.0,
-            "relationship_type": "unrelated",
-            "confidence": 0.9,
-            "description": "No apparent relation",
-            "linguistic_features": {},
-        }
-
-    # Calculate Jaccard similarity
-    similarity = len(common_chars) / (len(set(word1) | set(word2)))
-
-    # Adjust based on language pairs (some language pairs share more vocabulary)
-    language_pair_boost = {
-        ("en", "es"): 0.1,  # English-Spanish
-        ("es", "en"): 0.1,
-        ("en", "ca"): 0.05,  # English-Catalan
-        ("ca", "en"): 0.05,
-        ("es", "ca"): 0.2,  # Spanish-Catalan (more similar)
-        ("ca", "es"): 0.2,
-    }
-
-    # Apply language pair specific boost
-    similarity += language_pair_boost.get((lang1, lang2), 0)
-
-    # Cap at 1.0
-    similarity = min(1.0, similarity)
-
-    return {
-        "score": similarity,
-        "relationship_type": "char_similarity",
-        "confidence": similarity,
-        "description": f"Character similarity ({similarity:.2f})",
-        "linguistic_features": {
-            "common_chars": list(common_chars),
-            "char_overlap": similarity,
-        },
-    }
-
-
 def _word_pos_details(word_data: dict) -> tuple:
     """
     Extract (word, pos, details) from a POS-tagged word dict.
@@ -910,8 +695,18 @@ def process_sentence_pair(
     added_nodes,
     word_relations_cache,
     sentence_group="",
+    alignment_pairs=frozenset(),
 ):
-    """Process a pair of sentences in different languages and add them to the graph"""
+    """
+    Process a pair of sentences in different languages and add them to the graph.
+
+    alignment_pairs: a set of (source_word, target_word) tuples, lowercased,
+    that the translation LLM reported as corresponding to each other - see
+    `idiomapp.streamlit.app.analyze_translation`. Used to draw `translation`
+    edges; independently, `detect_cognate` draws `cognate` edges wherever two
+    words look alike, regardless of alignment - a pair can honestly be both,
+    or either, so both checks always run.
+    """
 
     logger.info(f"Processing sentence pair: {source_lang} to {target_lang}")
 
@@ -927,87 +722,40 @@ def process_sentence_pair(
             target_pos, target_lang, sentence_group, graph_data, added_nodes
         )
 
-        # Add edges between source and target words based on alignment
         for source_word_data in source_pos:
             source_word, source_pos_val, _ = _word_pos_details(source_word_data)
             source_id = f"{source_word}_{source_lang}{sentence_group}"
 
-            # For each target word, establish a direct translation edge if appropriate
             for target_word_data in target_pos:
                 target_word, target_pos_val, _ = _word_pos_details(target_word_data)
                 target_id = f"{target_word}_{target_lang}{sentence_group}"
 
                 try:
-                    # Use enhanced word similarity analysis - always returns a dict,
-                    # including its own error-fallback paths.
-                    similarity_info = calculate_word_similarity(
-                        source_word, target_word, source_lang, target_lang
-                    )
-
-                    # Safely extract data
-                    similarity_score = similarity_info.get("score", 0)
-                    relationship_type = similarity_info.get(
-                        "relationship_type", "unknown"
-                    )
-                    relationship_description = similarity_info.get(
-                        "description", "Related words"
-                    )
-
-                    # Only add edges for words that seem related above a threshold
-                    if similarity_score > 0.3:
-                        # Create a detailed label based on the relationship type
-                        if relationship_type == "direct_translation":
-                            edge_label = "direct translation"
-                        elif relationship_type == "cognate":
-                            edge_label = "cognate"
-                        elif relationship_type == "semantic_equivalent":
-                            edge_label = "equivalent"
-                        else:
-                            edge_label = relationship_type.replace("_", " ")
-
-                        # Create detailed tooltip with linguistic information
-                        linguistic_features = similarity_info.get(
-                            "linguistic_features", {}
-                        )
-                        pos_match = linguistic_features.get("pos_match", False)
-                        is_cognate = linguistic_features.get("is_cognate", False)
-
-                        # Build tooltip with rich information
-                        tooltip_parts = [
-                            f"{relationship_description}",
-                            f"Source: {source_word} ({source_pos_val})"
-                            if source_pos_val
-                            else f"Source: {source_word}",
-                            f"Target: {target_word} ({target_pos_val})"
-                            if target_pos_val
-                            else f"Target: {target_word}",
-                        ]
-
-                        if pos_match:
-                            tooltip_parts.append("Same part of speech ✓")
-
-                        if is_cognate:
-                            tooltip_parts.append("Historical cognate words ✓")
-
-                        # Add edit distance if available
-                        edit_distance = linguistic_features.get("edit_distance")
-                        if edit_distance:
-                            tooltip_parts.append(
-                                f"String similarity: {edit_distance:.2f}"
-                            )
-
-                        tooltip = "; ".join(tooltip_parts)
-
-                        # Add translation edge
+                    if (source_word.lower(), target_word.lower()) in alignment_pairs:
                         graph_data["edges"].append(
                             {
                                 "from": source_id,
                                 "to": target_id,
-                                "relation": relationship_type,
-                                "strength": similarity_score,
-                                "label": edge_label,
-                                "description": relationship_description,
-                                "title": tooltip,  # This will be used for the edge tooltip
+                                "relation": "translation",
+                                "strength": 1.0,
+                                "label": "translation",
+                                "description": "Reported as a translation pair",
+                                "title": f"{source_word} ({source_pos_val or '?'}) → {target_word} ({target_pos_val or '?'})",
+                            }
+                        )
+
+                    cognate_confidence = detect_cognate(source_word, target_word)
+                    if cognate_confidence is not None:
+                        graph_data["edges"].append(
+                            {
+                                "from": source_id,
+                                "to": target_id,
+                                "relation": "cognate",
+                                "strength": cognate_confidence,
+                                "label": "cognate",
+                                "description": f"Cognate words that share common etymology ({cognate_confidence:.1f})",
+                                "title": f"{source_word} ({source_pos_val or '?'}) ↔ {target_word} ({target_pos_val or '?'})",
+                                "dashes": True,
                             }
                         )
                 except Exception as e:
@@ -1097,12 +845,13 @@ def add_cross_sentence_relationships(graph_data):
                         pos2 = node2.get("pos", "unknown")
                         if pos2 == pos1:
                             try:
-                                # Use the enhanced similarity function for words in the same language
-                                similarity_info = calculate_word_similarity(
+                                # Both nodes are already guaranteed same-language by
+                                # the skip condition above - go straight to the
+                                # same-language (real word-vector-based) path.
+                                similarity_info = _calculate_same_language_similarity(
                                     node1["label"],
                                     node2["label"],
                                     node1.get("language", "en"),
-                                    node2.get("language", "en"),
                                 )
 
                                 # Extract similarity score and information
@@ -1203,49 +952,36 @@ def add_cross_language_relationships(graph_data, target_langs):
                     for node1 in nodes_by_lang_pos[lang1][pos]:
                         for node2 in nodes_by_lang_pos[lang2][pos]:
                             try:
-                                # If the nodes are in same sentence group, good candidate for connection
-                                same_sentence = node1.get(
-                                    "sentence_group", ""
-                                ) == node2.get("sentence_group", "")
-
-                                # Use enhanced similarity calculation
-                                similarity_info = calculate_word_similarity(
-                                    node1["label"], node2["label"], lang1, lang2
+                                # No alignment data reaches this function - it only
+                                # ever compares target-vs-target nodes (e.g. es<->ca),
+                                # and this app never translates target-to-target - so
+                                # cognate detection is the only signal available here.
+                                confidence = detect_cognate(
+                                    node1["label"], node2["label"]
                                 )
 
-                                # Get similarity score and relationship data
-                                similarity_score = similarity_info.get("score", 0)
-                                relationship_type = similarity_info.get(
-                                    "relationship_type", "cross_language"
-                                )
-                                description = similarity_info.get(
-                                    "description", "Related words across languages"
-                                )
+                                if confidence is not None:
+                                    same_sentence = node1.get(
+                                        "sentence_group", ""
+                                    ) == node2.get("sentence_group", "")
 
-                                # Connect nodes if semantically similar
-                                min_threshold = 0.2 if same_sentence else 0.4
-
-                                if similarity_score >= min_threshold:
-                                    # Create a tooltip with translation information
-                                    tooltip = f"{description}; {node1['label']} ({lang1}) ↔ {node2['label']} ({lang2})"
-
+                                    tooltip = (
+                                        f"Cognate words that share common etymology "
+                                        f"({confidence:.1f}); {node1['label']} ({lang1}) "
+                                        f"↔ {node2['label']} ({lang2})"
+                                    )
                                     if same_sentence:
                                         tooltip += "; Same sentence ✓"
 
-                                    # Add cross-language edge
                                     graph_data["edges"].append(
                                         {
                                             "from": node1["id"],
                                             "to": node2["id"],
-                                            "relation": "cross_language",
-                                            "strength": similarity_score,
-                                            "label": relationship_type.replace(
-                                                "_", " "
-                                            ),
-                                            "description": description,
+                                            "relation": "cognate",
+                                            "strength": confidence,
+                                            "label": "cognate",
+                                            "description": "Cognate words that share common etymology",
                                             "title": tooltip,
-                                            "color": "#4CC9F0",  # Blue for cross-language
-                                            "width": 2,
                                             "dashes": True,
                                         }
                                     )

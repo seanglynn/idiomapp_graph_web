@@ -24,7 +24,14 @@ The graph itself, while it's being built and grown, is a real
 - not a hand-rolled pair of node/edge lists. `MultiDiGraph` specifically
 because two words can legitimately be connected by more than one relation at
 once (e.g. a translation edge *and* a cognate edge between the same pair),
-and a simpler graph type would silently drop one of them.
+and a simpler graph type would silently drop one of them. This isn't
+hypothetical: `translation` edges come from LLM-reported word alignment (a
+translation call now returns which source word maps to which target word,
+not just the translated text) and `cognate` edges come from an independent
+string-similarity heuristic (shared prefix/suffix, or high edit-distance) -
+two different, genuinely separate signals that a real word pair can honestly
+match both of at once, so both edges are kept side by side rather than one
+formula trying to blend them into a single score.
 
 ## Diagram
 

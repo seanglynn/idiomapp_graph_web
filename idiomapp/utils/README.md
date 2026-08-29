@@ -11,7 +11,7 @@ Natural Language Processing utilities based on [textacy](https://textacy.readthe
 - `analyze_parts_of_speech`: Analyze parts of speech in text using spaCy
 - `split_into_sentences`: Split text into sentences using textacy
 - `calculate_similarity`: Calculate string similarity between words
-- `calculate_word_similarity`: Calculate similarity between words in different languages
+- `detect_cognate`: Detect whether two words in different languages look like cognates
 - `build_word_cooccurrence_network`: Build co-occurrence networks using textacy
 - `detect_language`: Detect the language of a text
 - `get_network_stats`: Calculate various network statistics
