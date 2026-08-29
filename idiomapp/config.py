@@ -4,8 +4,9 @@ Global configuration module for Idiomapp.
 This module uses pydantic-settings to manage configuration from environment variables and defaults.
 """
 
+import re
 from enum import Enum
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from pydantic import Field, computed_field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -438,6 +439,50 @@ def anthropic_supports_effort(model_name: str) -> bool:
     return bool(
         get_anthropic_model_capabilities(model_name).get("supports_effort", False)
     )
+
+
+# A configured Claude model (a default, an env var, whatever was last picked) is
+# often a rolling alias, e.g. "claude-haiku-4-5" - Anthropic always resolves that
+# to whatever the current snapshot is when you send a request. But `models.list()`
+# - what the sidebar's dropdown is populated from - returns the dated snapshot
+# itself (e.g. "claude-haiku-4-5-20251001"), not the alias. The two strings name
+# the same model but never compare equal, which used to make the dropdown silently
+# lose track of the configured model and fall back to whatever happened to be
+# first in the API response.
+
+
+def resolve_anthropic_model(
+    configured: str, available_models: List[str]
+) -> Optional[str]:
+    """
+    Find which entry in a live-fetched Claude model list is the configured model.
+
+    Tries an exact match first (already the same string), then a dated-snapshot
+    match: exactly `configured` plus a trailing "-YYYYMMDD", e.g.
+    "claude-haiku-4-5" -> "claude-haiku-4-5-20251001". The match requires the
+    snapshot suffix to immediately follow the full configured string, so a
+    shorter, unrelated alias (e.g. "claude-opus-4") can't accidentally match a
+    later generation's snapshot (e.g. "claude-opus-4-5-20251101"). Returns None,
+    not a guess, when nothing in `available_models` is plausibly the configured
+    model - callers decide the fallback (e.g. defaulting to the list's own
+    first/newest entry).
+
+    Args:
+        configured: The model id or alias currently configured/selected.
+        available_models: Model ids as returned by the live Anthropic API.
+
+    Returns:
+        The matching entry from `available_models`, or None.
+    """
+    if configured in available_models:
+        return configured
+
+    dated_snapshot = re.compile(rf"^{re.escape(configured)}-\d{{8}}$")
+    for model in available_models:
+        if dated_snapshot.match(model):
+            return model
+
+    return None
 
 
 # Relation type colors for graph edges

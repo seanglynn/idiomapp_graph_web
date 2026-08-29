@@ -2,6 +2,8 @@ import os
 import re
 import asyncio
 import html
+from dataclasses import dataclass, field
+from typing import Optional
 
 # Third-party imports
 import streamlit as st
@@ -14,24 +16,36 @@ from idiomapp.utils.llm_utils import (
 )
 from idiomapp.utils.ollama_utils import get_available_models
 from idiomapp.utils.async_utils import run_async
-from idiomapp.utils.schemas import Translation
+from idiomapp.utils.schemas import AlignmentPair, Translation
 from idiomapp.utils.state_utils import get_llm_client, get_provider_credentials
 from idiomapp.utils.logging_utils import get_logger, get_recent_logs, clear_logs
 from idiomapp.utils.graph_storage import get_graph_storage
 from idiomapp.utils.graph_viz import (
     GRAPH_CLICK_JS,
+    CategoryPayload,
+    CooccurrenceWordPayload,
+    EdgeSelection,
+    LeafNodePayload,
+    NodeSelection,
+    RecursiveLeafPayload,
+    SemanticWordPayload,
+    SourcedSelection,
+    WordKey,
+    apply_pinned_positions,
+    build_cooccurrence_graph,
     build_graph_echarts_options,
-    cooccurrence_graph_to_echarts_data,
+    build_semantic_graph,
+    compose_semantic_graph_with_expansions,
     filter_invalid_nodes,
     format_entries,
+    graph_to_echarts_data,
     resolve_graph_click,
-    semantic_graph_to_echarts_data,
-    word_analysis_to_echarts_data,
 )
 from idiomapp.config import (
     settings,
     LANGUAGE_MAP,
     LLMProvider,
+    resolve_anthropic_model,
 )
 from idiomapp.utils.nlp_utils import (
     split_into_sentences,
@@ -55,7 +69,7 @@ logger = get_logger("streamlit_app")
 st.set_page_config(
     page_title="Idiomapp",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 # Add minimal custom styling that works with dark theme
@@ -133,6 +147,27 @@ st.markdown(
         border-radius: 10px;
         padding: 15px;
         background-color: #1E1E1E;
+    }
+    /* The sidebar starts collapsed so the graph gets most of the screen.
+       Reskin its native toggle as a hamburger icon, the same way whether
+       it's currently collapsed (stExpandSidebarButton) or open
+       (stSidebarCollapseButton) - both already toggle Streamlit's own
+       already-responsive sidebar (it overlays as a drawer on narrow/mobile
+       viewports); only the glyph changes here. Streamlit renders that glyph
+       as a Material Symbols icon-font ligature (literal text like
+       "keyboard_double_arrow_right" rendered as a chevron glyph by the
+       font), so swapping it means hiding that text and rendering the
+       "menu" ligature - the standard hamburger glyph - in its place. */
+    [data-testid="stExpandSidebarButton"] [data-testid="stIconMaterial"],
+    [data-testid="stSidebarCollapseButton"] [data-testid="stIconMaterial"] {
+        font-size: 0;
+    }
+    [data-testid="stExpandSidebarButton"] [data-testid="stIconMaterial"]::after,
+    [data-testid="stSidebarCollapseButton"] [data-testid="stIconMaterial"]::after {
+        content: "menu";
+        font-family: "Material Symbols Rounded";
+        font-size: 24px;
+        font-weight: 400;
     }
 </style>
 """,
@@ -697,13 +732,29 @@ def display_translation_error(error_message: str, target_lang: str):
     st.error(f"{lang_name} {flag}: {error_message}")
 
 
-async def translate_text(client, source_text, source_lang, target_lang):
+@dataclass(frozen=True, slots=True)
+class TranslationResult:
+    """A translated segment of text, plus any word-level alignment the LLM
+    reported. `error` is set instead of `text` when translation failed -
+    callers check that rather than sniffing `text` for an "Error:" prefix."""
+
+    text: str = ""
+    alignment: list[AlignmentPair] = field(default_factory=list)
+    error: Optional[str] = None
+
+
+async def translate_text(
+    client, source_text, source_lang, target_lang
+) -> TranslationResult:
     """
     Translate text using the LLM client.
 
     Every provider implements generate_json, so there is one path here rather than
-    a per-provider branch. Providers that support schema-constrained output use the
-    Translation model; the rest fall back to tolerant parsing inside the client.
+    a per-provider branch. Only Claude's client actually validates its response
+    against `schema` internally (see llm_utils.py); Ollama/OpenAI return raw
+    parsed JSON, so the result is re-validated through `Translation` here for
+    every provider alike - that's also what makes `Translation.alignment`'s
+    tolerant parsing (schemas.py's `_to_alignment_pairs`) actually run.
 
     Args:
         client: The LLM client (Ollama, OpenAI or Anthropic)
@@ -712,7 +763,7 @@ async def translate_text(client, source_text, source_lang, target_lang):
         target_lang: Target language code
 
     Returns:
-        Translated text, or an "Error: ..." string
+        A TranslationResult - `.text`/`.alignment` on success, `.error` on failure.
     """
     logger.info(f"Translating from {source_lang} to {target_lang}: {source_text}")
 
@@ -721,8 +772,10 @@ async def translate_text(client, source_text, source_lang, target_lang):
 
     system_prompt = (
         f"You are a professional translator. Translate text from {source_name} to "
-        f'{target_name}. Return ONLY a JSON object with a single key "translation" '
-        f"containing the translated text. Preserve the original formatting "
+        f'{target_name}. Return ONLY a JSON object with keys "translation" (the '
+        f'translated text) and "alignment" (a list of {{"source_word": ..., '
+        f'"target_word": ...}} pairs, one per content word - skip function words '
+        f"with no clear one-to-one match). Preserve the original formatting "
         f"(line breaks, punctuation)."
     )
 
@@ -730,7 +783,7 @@ async def translate_text(client, source_text, source_lang, target_lang):
 
 {source_text}
 
-Return JSON: {{"translation": "your translation here"}}"""
+Return JSON: {{"translation": "your translation here", "alignment": [{{"source_word": "...", "target_word": "..."}}]}}"""
 
     try:
         result = await client.generate_json(
@@ -740,22 +793,24 @@ Return JSON: {{"translation": "your translation here"}}"""
         if "error" in result:
             logger.error(f"Translation error: {result['error']}")
             error = result["error"]
-            return error if str(error).startswith("Error:") else f"Error: {error}"
+            message = error if str(error).startswith("Error:") else f"Error: {error}"
+            return TranslationResult(error=message)
 
-        translation = (result.get("translation") or "").strip()
+        parsed = Translation.model_validate(result)
+        translation = parsed.translation.strip()
         if not translation:
             logger.error("Empty translation in response")
-            return "Error: Empty translation received"
+            return TranslationResult(error="Error: Empty translation received")
 
         logger.info(f"Translation result: {translation[:100]}...")
-        return translation
+        return TranslationResult(text=translation, alignment=parsed.alignment)
 
     except Exception as e:
         logger.error(f"Translation error: {str(e)}")
-        return f"Error: {str(e)}"
+        return TranslationResult(error=f"Error: {str(e)}")
 
 
-async def analyze_translation(source_text, target_texts, target_langs):
+async def analyze_translation(source_text, target_texts, target_langs, alignments=None):
     """
     Analyze translation and generate graph with related words.
 
@@ -763,6 +818,11 @@ async def analyze_translation(source_text, target_texts, target_langs):
         source_text: Source text to translate
         target_texts: List of translations
         target_langs: List of target languages
+        alignments: Optional list of AlignmentPair lists, one per target_lang
+            (same order/length as target_texts) - see TranslationResult.
+            Covers the whole translated text, not per-sentence; scoped down to
+            each sentence pair automatically, since a pair only ever matches
+            words that sentence actually contains.
 
     Returns:
         Dictionary with nodes and edges for the graph
@@ -792,6 +852,15 @@ async def analyze_translation(source_text, target_texts, target_langs):
     for lang, text in zip(target_langs, target_texts):
         target_sentences_by_lang[lang] = split_into_sentences(text)
 
+    # One lowercased (source_word, target_word) lookup set per language, built
+    # once - process_sentence_pair's existing per-word-pair loop naturally
+    # scopes this to whichever words a given sentence pair actually contains.
+    alignment_pairs_by_lang = {}
+    for lang, pairs in zip(target_langs, alignments or []):
+        alignment_pairs_by_lang[lang] = frozenset(
+            (pair.source_word.lower(), pair.target_word.lower()) for pair in pairs
+        )
+
     # Set of nodes already added to avoid duplicates
     added_nodes = set()
     # Cache for word relations to avoid redundant API calls
@@ -815,6 +884,7 @@ async def analyze_translation(source_text, target_texts, target_langs):
                     added_nodes,
                     word_relations_cache,
                     sentence_group,
+                    alignment_pairs_by_lang.get(lang, frozenset()),
                 )
 
     # Add cross-sentence relationships if multiple sentences
@@ -854,8 +924,14 @@ def visualize_translation_graph(graph_data):
         st.warning("Unable to generate meaningful graph from the translation results.")
         return
 
-    styled = semantic_graph_to_echarts_data(filtered)
-    options = build_graph_echarts_options(styled)
+    base = build_semantic_graph(filtered)
+    composed = compose_semantic_graph_with_expansions(
+        base,
+        st.session_state["graph_word_analyses"],
+        st.session_state["graph_expanded_categories"],
+    )
+    pinned = apply_pinned_positions(composed, st.session_state["graph_node_positions"])
+    options = build_graph_echarts_options(graph_to_echarts_data(pinned))
 
     graph_col, panel_col = st.columns([2, 1], gap="medium")
     with graph_col:
@@ -868,9 +944,25 @@ def visualize_translation_graph(graph_data):
     if result:
         selection = resolve_graph_click(result.get("chart_event"))
         if selection:
-            st.session_state["graph_selection"] = {**selection, "source": "semantic"}
+            _remember_click_position(selection)
+            st.session_state["graph_selection"] = SourcedSelection(
+                selection=selection, source="semantic"
+            )
+            _dispatch_semantic_graph_click(selection)
     with panel_col:
         _render_graph_selection_panel("semantic")
+
+
+def _remember_click_position(selection) -> None:
+    """Capture a clicked node's on-screen position (if the frontend reported
+    one) so `apply_pinned_positions` can hold it still on the next redraw -
+    without this, adding a word's category hubs makes the whole graph
+    re-layout and every existing node can visibly jump, not just grow."""
+    if not isinstance(selection, NodeSelection) or selection.position is None:
+        return
+    node_id = getattr(selection.payload, "id", None)
+    if node_id:
+        st.session_state["graph_node_positions"][node_id] = selection.position
 
 
 def visualize_cooccurrence_network(graph, lang_code=None):
@@ -884,8 +976,9 @@ def visualize_cooccurrence_network(graph, lang_code=None):
         )
         return
 
-    styled = cooccurrence_graph_to_echarts_data(graph, lang_code)
-    options = build_graph_echarts_options(styled)
+    options = build_graph_echarts_options(
+        graph_to_echarts_data(build_cooccurrence_graph(graph, lang_code))
+    )
 
     graph_col, panel_col = st.columns([2, 1], gap="medium")
     with graph_col:
@@ -898,12 +991,83 @@ def visualize_cooccurrence_network(graph, lang_code=None):
     if result:
         selection = resolve_graph_click(result.get("chart_event"))
         if selection:
-            st.session_state["graph_selection"] = {
-                **selection,
-                "source": "cooccurrence",
-            }
+            st.session_state["graph_selection"] = SourcedSelection(
+                selection=selection, source="cooccurrence"
+            )
     with panel_col:
         _render_graph_selection_panel("cooccurrence")
+
+
+def _dispatch_semantic_graph_click(selection) -> None:
+    """React to a click in the Semantic Graph - this is what makes the graph
+    an *exploration* tool instead of just a picture: clicking a word analyzes
+    it automatically, clicking one of its category hubs (Synonyms, Etymology,
+    ...) shows or hides that category's results, and clicking a result that's
+    itself a word (a synonym) analyzes and explores *that* word too, the same
+    way, letting exploration continue as far as the user wants to go.
+
+    Edge clicks and clicks on plain, non-clickable leaf nodes (an idiom, an
+    example sentence) do nothing here - the side panel already shows their
+    details; there's no further action attached to them.
+    """
+    if isinstance(selection, EdgeSelection):
+        return
+    payload = selection.payload
+
+    if isinstance(payload, CategoryPayload):
+        _toggle_expanded_category(payload.word_key, payload.category)
+        st.rerun()
+        return
+
+    if isinstance(payload, LeafNodePayload):
+        return
+
+    if isinstance(payload, (SemanticWordPayload, RecursiveLeafPayload)):
+        if isinstance(payload, SemanticWordPayload):
+            word_key = WordKey.of(payload.label, payload.language)
+        else:
+            word_key = payload.word_key
+        _analyze_word_for_graph(word_key)
+
+
+def _toggle_expanded_category(word_key: WordKey, category: str) -> None:
+    """Flip one category hub between shown-with-results and collapsed."""
+    expanded = st.session_state["graph_expanded_categories"]
+    key = (word_key, category)
+    if key in expanded:
+        expanded.discard(key)
+    else:
+        expanded.add(key)
+
+
+def _analyze_word_for_graph(word_key: WordKey) -> None:
+    """Run (cache-backed) word analysis for a word clicked in the Semantic
+    Graph, unless it's already been analyzed this session - in which case
+    this does nothing at all, not even a cache lookup, so re-clicking an
+    already-explored word is instant.
+
+    Uses the exact same `analyze_word_linguistics` call - and therefore the
+    exact same on-disk cache - as the dropdown+button flow, so an LLM is
+    never called twice for the same word regardless of which path asked for
+    it first.
+    """
+    analyses = st.session_state["graph_word_analyses"]
+    if word_key in analyses:
+        return
+    if not st.session_state.get("model_available", False):
+        st.error("⚠️ LLM model not available. Please check the model status above.")
+        return
+    client = get_llm_client()
+    if client is None:
+        st.error("⚠️ Could not create an LLM client. Check the provider settings.")
+        return
+    with st.spinner(f"Analyzing '{word_key.word}'..."):
+        result = run_async(
+            analyze_word_linguistics(word_key.word, word_key.language, client)
+        )
+    if "error" not in result:
+        analyses[word_key] = result
+    st.rerun()
 
 
 def show_language_graphs_help():
@@ -1113,15 +1277,12 @@ def display_word_analysis(word: str, language: str, analysis_data: dict):
             st.json(analysis_data)
         return
 
-    # ── Two-column layout: graph left, tabbed panels right ──────────────────
-    graph_col, panels_col = st.columns([1, 1], gap="medium")
-
-    with graph_col:
-        st.caption("🕸️ Knowledge Graph — drag nodes, hover for details")
-        _display_word_knowledge_graph(word, language, analysis_data)
-
-    with panels_col:
-        _display_analysis_panels(word, language, analysis_data)
+    # The tabbed text detail (Origins/Meaning/Grammar/Usage/Idioms/Tips/Sound) -
+    # this app's per-word Knowledge Graph used to live in a column next to this;
+    # it's gone now that the Semantic Graph shows the same category/leaf data
+    # inline, in place, when a word is clicked there. This text stays exactly
+    # as it was, just full width instead of sharing the row with that graph.
+    _display_analysis_panels(word, language, analysis_data)
 
     # Raw data at the very bottom, collapsed
     with st.expander("🔧 Raw Data", expanded=False):
@@ -1290,117 +1451,103 @@ def _display_analysis_panels(word: str, language: str, analysis_data: dict):
             render_fn(analysis_data)
 
 
-def _display_word_knowledge_graph(word: str, language: str, analysis_data: dict):
-    """Create and display an interactive knowledge graph for the word analysis,
-    with a click-to-select detail panel shown beneath it. This already lives
-    inside display_word_analysis's own two-column layout, so stack rather than
-    nest another side-by-side split."""
-    styled = word_analysis_to_echarts_data(word, language, analysis_data)
-    options = build_graph_echarts_options(styled)
-
-    st.info(
-        "💡 **Interactive Graph:** Drag nodes to explore, click for details, "
-        "scroll to zoom."
-    )
-    result = st_echarts(
-        options=options,
-        events={"click": GRAPH_CLICK_JS},
-        height="450px",
-        key=f"echarts_knowledge_graph_{word}_{language}",
-    )
-    if result:
-        selection = resolve_graph_click(result.get("chart_event"))
-        if selection:
-            st.session_state["graph_selection"] = {**selection, "source": "knowledge"}
-    _render_graph_selection_panel("knowledge")
-
-
 def _render_graph_selection_panel(source: str) -> None:
     """Render the persistent detail panel for the currently-selected node/edge
-    in one of the three graphs. Scoped to `source` ("semantic" / "cooccurrence" /
-    "knowledge") so switching graphs doesn't show a stale selection from a
-    different one - each graph's raw node/edge shape is different enough
-    (translation-graph node vs. knowledge-graph category hub vs. co-occurrence
-    word, ...) that showing the wrong graph's selection would be misleading,
-    not just cosmetically off.
+    in one of the two graphs that have one (Semantic Graph, Co-occurrence
+    Network). Scoped to `source` so switching graphs doesn't show a stale
+    selection left over from the other one.
     """
-    selection = st.session_state.get("graph_selection")
-    if not selection or selection.get("source") != source:
+    sourced = st.session_state.get("graph_selection")
+    if not isinstance(sourced, SourcedSelection) or sourced.source != source:
         st.caption("Click a node or edge in the graph to see details here.")
         return
 
-    if selection["kind"] == "edge":
-        _render_edge_selection(selection["data"])
+    selection = sourced.selection
+    if isinstance(selection, EdgeSelection):
+        _render_edge_selection(selection)
         return
 
-    data = selection["data"]
-    node_kind = data.get("kind")  # knowledge-graph/co-occurrence nodes tag themselves
+    payload = selection.payload
 
-    if node_kind in ("category", "etymology", "etymology_detail"):
-        st.markdown(f"**{data.get('label', data.get('text', ''))}**")
-        if data.get("text"):
-            st.write(data["text"])
+    if isinstance(payload, CategoryPayload):
+        # Just a label - clicking this hub is what shows/hides its results
+        # (see _dispatch_semantic_graph_click); there's nothing more to show
+        # here than what the hub's own label already says.
+        st.markdown(f"**{payload.label}**")
         return
 
-    if node_kind == "main":
-        st.markdown(f"**{data['word']}**")
-        st.caption("This is the word already being analyzed.")
+    if isinstance(payload, LeafNodePayload):
+        st.markdown(f"**{payload.category.replace('_', ' ').title()}**")
+        st.write(payload.text)
+        if payload.gloss:
+            st.caption(payload.gloss)
         return
 
-    # A real, analyzable word: a semantic-graph node (id/label/language/pos/
-    # details), a knowledge-graph "item" leaf (word/language/text), or a
-    # co-occurrence word (word/language/degree).
-    word = data.get("word") or data.get("label", "")
-    language = data.get("language", "")
+    if isinstance(payload, CooccurrenceWordPayload):
+        # The co-occurrence graph is unrelated to the new exploration feature -
+        # unchanged manual "Analyze this word" button + singular session keys.
+        st.markdown(f"### {payload.word}")
+        if payload.language:
+            st.caption(
+                LANGUAGE_MAP.get(payload.language, {}).get("name", payload.language)
+            )
+        st.caption(f"Co-occurrences: {payload.degree}")
+        _render_analyze_button(
+            payload.word, payload.language or "", key=f"panel_analyze_{source}"
+        )
+        analysis = st.session_state.get("current_word_analysis")
+        if (
+            analysis
+            and st.session_state.get("current_word") == payload.word
+            and "error" not in analysis
+        ):
+            display_word_analysis(payload.word, payload.language or "", analysis)
+        return
+
+    # SemanticWordPayload or RecursiveLeafPayload: a real word from the
+    # Semantic Graph. Clicking it already triggered (or found cached)
+    # analysis in _dispatch_semantic_graph_click, so there's no button here -
+    # just show what's known, plus the full analysis once it's ready.
+    if isinstance(payload, SemanticWordPayload):
+        word, language = payload.label, payload.language
+    else:
+        word, language = payload.word_key.word, payload.word_key.language
+    word_key = WordKey.of(word, language)
+
     st.markdown(f"### {word}")
-    if language:
-        st.caption(LANGUAGE_MAP.get(language, {}).get("name", language))
-    if data.get("pos"):
-        st.markdown(_badge(data["pos"], "#4361EE"), unsafe_allow_html=True)
-    detail_text = data.get("details") or data.get("text")
-    if detail_text:
-        st.write(detail_text)
-    if data.get("degree") is not None:
-        st.caption(f"Co-occurrences: {data['degree']}")
+    st.caption(LANGUAGE_MAP.get(language, {}).get("name", language))
+    if isinstance(payload, SemanticWordPayload):
+        if payload.pos:
+            st.markdown(_badge(payload.pos, "#4361EE"), unsafe_allow_html=True)
+        if payload.details:
+            st.write(payload.details)
 
-    if word and language:
-        _render_analyze_button(word, language, key=f"panel_analyze_{source}")
-
-    analysis = st.session_state.get("current_word_analysis")
-    if (
-        word
-        and analysis
-        and st.session_state.get("current_word") == word
-        and "error" not in analysis
-    ):
+    analysis = st.session_state["graph_word_analyses"].get(word_key)
+    if analysis and "error" not in analysis:
         display_word_analysis(word, language, analysis)
+    else:
+        st.caption("Analyzing...")
 
 
-def _render_edge_selection(data: dict) -> None:
-    """Render the panel content for a clicked edge."""
-    kind = data.get("kind")
-    if kind in (
-        "category_edge",
-        "item_edge",
-        "etymology_edge",
-        "etymology_detail_edge",
-    ):
-        st.caption("A connection in the knowledge graph.")
+def _render_edge_selection(selection: EdgeSelection) -> None:
+    """Render the panel content for a clicked edge - always just descriptive,
+    since no edge triggers an action of its own."""
+    payload = selection.payload
+    if payload.kind in ("category_edge", "leaf_edge"):
+        st.caption("A connection in the word-exploration graph.")
         return
-    if kind == "cooccurrence_edge":
-        st.markdown(f"**{data['source']} ↔ {data['target']}**")
-        st.caption(f"Co-occurrence count: {data['weight']}")
+    if payload.kind == "cooccurrence_edge":
+        st.markdown(f"**{selection.source_id} ↔ {selection.target_id}**")
+        st.caption(f"Co-occurrence count: {payload.weight}")
         return
 
-    # Semantic-graph edge: from/to/relation/strength/label/description/title
-    relation = data.get("relation", "related").replace("_", " ")
-    st.markdown(f"**{data.get('from', '')} → {data.get('to', '')}**")
-    st.caption(relation)
-    text = data.get("title") or data.get("description")
-    if text:
-        st.write(text)
-    if data.get("strength") is not None:
-        st.caption(f"Strength: {data['strength']:.2f}")
+    # A semantic-graph relation edge (translation, cognate, ...).
+    st.markdown(f"**{selection.source_id} → {selection.target_id}**")
+    st.caption(payload.kind.replace("_", " "))
+    if payload.description:
+        st.write(payload.description)
+    if payload.strength is not None:
+        st.caption(f"Strength: {payload.strength:.2f}")
 
 
 def _render_analyze_button(word: str, language: str, *, key: str) -> None:
@@ -1728,8 +1875,16 @@ def _render_sidebar() -> tuple[str, list[str]]:
                     and st.session_state["llm_provider"] == "anthropic"
                 )
                 model_label = build_model_label("Claude Model", is_anthropic_available)
+                # The configured model is often a rolling alias ("claude-haiku-4-5")
+                # while the live API lists a dated snapshot ("claude-haiku-4-5-
+                # 20251001") - resolve one against the other before doing the
+                # exact-match lookup, or the dropdown loses track of it and
+                # silently falls back to whatever the API listed first.
+                configured_model = resolve_anthropic_model(
+                    st.session_state["model_name"], anthropic_models
+                )
                 model_index = get_index(
-                    anthropic_models, st.session_state["model_name"]
+                    anthropic_models, configured_model or st.session_state["model_name"]
                 )
                 is_disabled = not is_anthropic_available
 
@@ -2199,6 +2354,25 @@ def _render_translation_panel(
     return source_text, translate_button
 
 
+def _filter_edges(edges: list, min_strength: float, selected_kinds) -> list:
+    """Keep only edges at/above min_strength and whose relation is selected."""
+    return [
+        edge
+        for edge in edges
+        if edge.get("strength", 1.0) >= min_strength
+        and edge.get("relation", "related") in selected_kinds
+    ]
+
+
+# Friendly labels for the relation-kind filter; anything not listed here falls
+# back to a title-cased version of its raw relation string.
+_RELATION_KIND_LABELS = {
+    "translation": "🔤 Translation",
+    "cognate": "🌍 Cognate",
+    "cross_sentence": "📝 Same sentence",
+}
+
+
 def _render_graph_visualization_tabs() -> None:
     """Render the Semantic Graph / Co-occurrence Network tabs, including the
     word-selection and word-analysis UI nested inside the semantic graph tab."""
@@ -2216,15 +2390,37 @@ def _render_graph_visualization_tabs() -> None:
                 # Interactive Word Analysis Section
                 st.markdown("### 🔍 Interactive Word Analysis")
                 st.markdown(
-                    "**Click any word or connection in the graph to see it in the "
-                    "panel on the right** — from there you can run full LLM word "
-                    "analysis."
+                    "**Click any word to analyze it automatically** — its "
+                    "categories (Synonyms, Etymology, Examples, ...) appear "
+                    "as new nodes attached to it. Click a category to reveal "
+                    "or hide its results, and click a result that's itself a "
+                    "word to keep exploring from there."
                 )
 
                 # Display controls for the graph
                 available_langs = list(st.session_state["graph_data"].keys())
                 merge_graphs = True  # Default to merged view
-                min_strength = 0.5  # Default strength
+                # Cross-language scores usually land well under 0.5, even for
+                # correct direct translations - a 0.5 default hid nearly everything.
+                min_strength = 0.0  # Default: show every relationship that was found
+
+                # Peek at every relation kind that could actually appear, so the
+                # kind filter's options match reality instead of a hardcoded
+                # guess. Merging only adds edges (never removes any), so the
+                # merged graph's kinds are a superset of any single-language
+                # view's - cheap and safe to compute even when merging is off.
+                if len(available_langs) > 1:
+                    preview_edges = merge_language_graphs(
+                        st.session_state["graph_data"]
+                    )["edges"]
+                else:
+                    preview_edges = next(iter(st.session_state["graph_data"].values()))[
+                        "edges"
+                    ]
+                available_kinds = sorted(
+                    {edge.get("relation", "related") for edge in preview_edges}
+                )
+                selected_kinds = available_kinds
 
                 with st.expander("Graph Options", expanded=False):
                     # Create columns for options
@@ -2244,25 +2440,38 @@ def _render_graph_visualization_tabs() -> None:
                             "Minimum relationship strength",
                             min_value=0.0,
                             max_value=1.0,
-                            value=0.5,
+                            value=0.0,
                             step=0.1,
-                            help="Only show strong relationships above this threshold",
+                            help=(
+                                "Hide relationships weaker than this. Cross-language "
+                                "word-pair scores are often well under 0.5, even for "
+                                "correct direct translations - start at 0 to see "
+                                "everything, then raise it to declutter."
+                            ),
                         )
+
+                    selected_kinds = st.multiselect(
+                        "Relationship types to show",
+                        options=available_kinds,
+                        default=available_kinds,
+                        format_func=lambda k: _RELATION_KIND_LABELS.get(
+                            k, k.replace("_", " ").title()
+                        ),
+                        help=(
+                            "Each relationship type comes from a different signal - "
+                            "Translation is LLM-reported, Cognate is a look-alike "
+                            "heuristic. Deselect a type to hide it everywhere below."
+                        ),
+                    )
 
                 # Display the graph based on selection
 
                 if merge_graphs and len(available_langs) > 1:
                     # Create a merged graph with cross-language connections
                     merged_graph = merge_language_graphs(st.session_state["graph_data"])
-
-                    # Filter edges by strength
-                    if min_strength > 0:
-                        filtered_edges = [
-                            edge
-                            for edge in merged_graph["edges"]
-                            if edge.get("strength", 1.0) >= min_strength
-                        ]
-                        merged_graph["edges"] = filtered_edges
+                    merged_graph["edges"] = _filter_edges(
+                        merged_graph["edges"], min_strength, selected_kinds
+                    )
 
                     st.markdown(
                         f"**Combined graph showing relationships between {', '.join(available_langs)}**"
@@ -2276,21 +2485,14 @@ def _render_graph_visualization_tabs() -> None:
                         format_func=get_language_display,
                     )
 
-                    # Filter edges by strength if needed
                     graph_data = st.session_state["graph_data"][selected_lang]
-                    if min_strength > 0:
-                        filtered_edges = [
-                            edge
-                            for edge in graph_data["edges"]
-                            if edge.get("strength", 1.0) >= min_strength
-                        ]
-                        # Create a copy of the graph with filtered edges
-                        filtered_graph = {
-                            "nodes": graph_data["nodes"],
-                            "edges": filtered_edges,
-                            "metadata": graph_data.get("metadata", {}),
-                        }
-                        graph_data = filtered_graph
+                    graph_data = {
+                        "nodes": graph_data["nodes"],
+                        "edges": _filter_edges(
+                            graph_data["edges"], min_strength, selected_kinds
+                        ),
+                        "metadata": graph_data.get("metadata", {}),
+                    }
 
                     # Display the selected graph
                     st.markdown(
@@ -2311,18 +2513,14 @@ def _render_graph_visualization_tabs() -> None:
 
                 with legend_col2:
                     st.markdown("#### Edge Types")
-                    st.markdown("⚪ **White** - Direct translation")
-                    st.markdown("🔶 **Gold** - Cognates (similar words)")
-                    st.markdown("🔹 **Teal** - Semantic equivalents")
+                    st.markdown("⚪ **White** - Translation (LLM-reported)")
+                    st.markdown("🔶 **Gold dashed** - Cognate (looks alike)")
                     st.markdown("🟢 **Green** - Synonyms")
                     st.markdown("🔴 **Red** - Antonyms")
                     st.markdown("🟠 **Orange** - Hypernyms (broader terms)")
                     st.markdown("🟡 **Yellow** - Hyponyms (specific terms)")
                     st.markdown("🔵 **Cyan** - Contextual relation")
                     st.markdown("🟣 **Purple dashed** - Cross-sentence relation")
-                    st.markdown("🟠 **Orange dashed** - Cross-language similarity")
-                    st.markdown("🔷 **Light blue** - Common prefix")
-                    st.markdown("🔮 **Light purple** - Common suffix")
 
                 with legend_col3:
                     st.markdown("#### Word Types")
@@ -2595,25 +2793,24 @@ def _handle_translate_button(
 
                 results = run_async(translate_all())
 
-                for target_lang, translation in zip(target_langs, results):
-                    if isinstance(translation, Exception):
-                        logger.error(
-                            f"Translation raised for {target_lang}: {translation}"
-                        )
-                        translation_errors[target_lang] = str(translation)
+                for target_lang, result in zip(target_langs, results):
+                    if isinstance(result, Exception):
+                        logger.error(f"Translation raised for {target_lang}: {result}")
+                        translation_errors[target_lang] = str(result)
                         continue
 
-                    if translation.startswith("Error:") or "Error code:" in translation:
+                    if result.error or "Error code:" in result.text:
+                        message = result.error or result.text
                         error_message = handle_translation_error(
-                            translation, source_lang, target_lang
+                            message, source_lang, target_lang
                         )
                         translation_errors[target_lang] = error_message
                         logger.warning(
-                            f"Translation failed for {target_lang}: {translation}"
+                            f"Translation failed for {target_lang}: {message}"
                         )
                         continue
 
-                    successful_translations[target_lang] = translation
+                    successful_translations[target_lang] = result
 
                 # Spanish and Catalan are close enough that a model occasionally
                 # returns them the wrong way round. Checked once, after all
@@ -2649,8 +2846,8 @@ def _handle_translate_button(
                             1 for marker in markers if f" {marker} " in f" {text} "
                         )
 
-                    es_text = successful_translations["es"]
-                    ca_text = successful_translations["ca"]
+                    es_text = successful_translations["es"].text
+                    ca_text = successful_translations["ca"].text
 
                     if count_markers(catalan_markers, es_text) > count_markers(
                         spanish_markers, es_text
@@ -2660,9 +2857,12 @@ def _handle_translate_button(
                         logger.warning(
                             "Detected possible language mismatch. Swapping Spanish and Catalan translations."
                         )
+                        # Swap the whole result, not just the text - the alignment
+                        # data was computed alongside whichever text it came with,
+                        # so it's mislabeled the same way and needs to move with it.
                         successful_translations["es"], successful_translations["ca"] = (
-                            ca_text,
-                            es_text,
+                            successful_translations["ca"],
+                            successful_translations["es"],
                         )
 
                 # Read the co-occurrence settings once rather than per language.
@@ -2672,10 +2872,10 @@ def _handle_translate_button(
                     "selected_pos", ["NOUN", "VERB", "ADJ"]
                 )
 
-                for target_lang, translation in successful_translations.items():
+                for target_lang, result in successful_translations.items():
                     # Add each translation as a separate message
                     translation_content = (
-                        f"{get_language_display(target_lang)}: {translation.strip()}"
+                        f"{get_language_display(target_lang)}: {result.text.strip()}"
                     )
                     st.session_state["chat_history"].append(
                         {
@@ -2687,7 +2887,12 @@ def _handle_translate_button(
 
                     # Generate the graph data for this language (spaCy, no network I/O)
                     all_graph_data[target_lang] = run_async(
-                        analyze_translation(source_text, [translation], [target_lang])
+                        analyze_translation(
+                            source_text,
+                            [result.text],
+                            [target_lang],
+                            [result.alignment],
+                        )
                     )
 
                     # Source text co-occurrence - only needs building once
@@ -2714,10 +2919,10 @@ def _handle_translate_button(
 
                     # Target text co-occurrence
                     logger.info(
-                        f"Building co-occurrence network for {target_lang} with {len(translation.split())} words"
+                        f"Building co-occurrence network for {target_lang} with {len(result.text.split())} words"
                     )
                     target_cooccurrence = build_word_cooccurrence_network(
-                        translation,
+                        result.text,
                         target_lang,
                         window_size=window_size,
                         min_freq=min_freq,
@@ -2767,9 +2972,11 @@ def _handle_translate_button(
                                     model_used=st.session_state.get(
                                         "llm_provider", "unknown"
                                     ),
-                                    translation_text=successful_translations.get(
-                                        target_lang, ""
-                                    ),
+                                    translation_text=successful_translations[
+                                        target_lang
+                                    ].text
+                                    if target_lang in successful_translations
+                                    else "",
                                 )
                                 logger.info(
                                     f"Stored graph {graph_id} for {target_lang}"
@@ -2827,6 +3034,9 @@ def main():
         "current_word_lang": None,
         "help_dismissed": False,
         "graph_selection": None,
+        "graph_word_analyses": {},
+        "graph_expanded_categories": set(),
+        "graph_node_positions": {},
     }
     for key, value in default_session_state.items():
         st.session_state.setdefault(key, value)

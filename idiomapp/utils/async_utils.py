@@ -57,13 +57,24 @@ def run_async(coro: Awaitable[T]) -> T:
     """
     Run a coroutine to completion on this session's event loop.
 
+    Falls back to `run_coroutine_threadsafe` when the loop is already running
+    (a stale rerun's thread can still be inside it) instead of colliding with
+    a second `run_until_complete`.
+
     Args:
         coro: The awaitable to run.
 
     Returns:
         Whatever the coroutine returns.
     """
-    return get_event_loop().run_until_complete(coro)
+    loop = get_event_loop()
+    if loop.is_running():
+        future = asyncio.run_coroutine_threadsafe(coro, loop)
+        # A timeout here only matters if this is ever hit for a reason other than
+        # the cross-thread case above (e.g. a genuine same-thread reentrant call,
+        # which would otherwise deadlock forever) - fail loudly instead.
+        return future.result(timeout=120)
+    return loop.run_until_complete(coro)
 
 
 def loop_key() -> Any:

@@ -13,6 +13,7 @@ import json
 import pytest
 
 from idiomapp.utils.schemas import (
+    AlignmentPair,
     Entry,
     Grammar,
     LearnerNotes,
@@ -225,6 +226,44 @@ def test_entry_rejects_unknown_keys():
 
 def test_translation_schema():
     assert Translation.model_validate({"translation": "hola"}).translation == "hola"
+
+
+def test_translation_alignment_defaults_to_empty():
+    assert Translation.model_validate({"translation": "hola"}).alignment == []
+
+
+def test_translation_alignment_intended_shape():
+    model = Translation.model_validate(
+        {
+            "translation": "la luna",
+            "alignment": [{"source_word": "the moon", "target_word": "la luna"}],
+        }
+    )
+    assert model.alignment == [
+        AlignmentPair(source_word="the moon", target_word="la luna")
+    ]
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ({"moon": "luna"}, [("moon", "luna")]),
+        (["moon -> luna"], [("moon", "luna")]),
+        (["moon: luna"], [("moon", "luna")]),
+        ([{"moon": "luna"}], [("moon", "luna")]),
+    ],
+)
+def test_translation_alignment_normalises_loose_shapes(raw, expected):
+    model = Translation.model_validate({"translation": "x", "alignment": raw})
+    got = [(p.source_word, p.target_word) for p in model.alignment]
+    assert got == expected
+
+
+def test_translation_alignment_drops_unparseable_entries_instead_of_raising():
+    model = Translation.model_validate(
+        {"translation": "x", "alignment": [123, None, "no-separator-here"]}
+    )
+    assert model.alignment == []
 
 
 def test_grammar_and_pronunciation_tolerate_partial_data():
