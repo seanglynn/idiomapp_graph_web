@@ -16,16 +16,30 @@ Natural Language Processing utilities based on [textacy](https://textacy.readthe
 - `detect_language`: Detect the language of a text
 - `get_network_stats`: Calculate various network statistics
 
+### `graph_models.py`
+
+The typed models the graphs are made of (see `docs/graph_data_model.md`).
+No networkx or rendering code:
+
+- Graph elements: `WordKey`, `Position`, the `NodePayload` variants,
+  `EdgePayload`, and `parse_node_payload` / `parse_edge_payload`
+- Requests: `NodeSelection`, `EdgeSelection`, `SourcedSelection`, and
+  `WordExpansionRequest`
+
 ### `graph_viz.py`
 
-Adapters that turn this app's graph data into ECharts graph-series options
-(rendered via `streamlit-echarts`), plus the click-event resolver that makes a
-node/edge click round-trip back into Python:
+Builds graphs out of `graph_models` and turns them into ECharts graph-series
+options (rendered via `streamlit-echarts`), plus the click-event resolver
+that makes a node/edge click round-trip back into Python:
 
-- `semantic_graph_to_echarts_data` / `cooccurrence_graph_to_echarts_data` /
-  `word_analysis_to_echarts_data`: per-source adapters that style nodes/edges
-- `build_graph_echarts_options`: the shared, purely-mechanical ECharts assembly
-- `resolve_graph_click`: turn a raw click event back into `{"kind", "data"}`
+- `build_semantic_graph` / `build_cooccurrence_graph`: build a styled
+  `networkx.MultiDiGraph` for each graph
+- `build_word_expansion` / `compose_semantic_graph_with_expansions`: layer
+  analyzed words' category hubs and leaves onto the semantic graph
+- `graph_to_echarts_data` / `build_graph_echarts_options`: flatten a graph
+  and assemble the ECharts options
+- `resolve_graph_click`: turn a raw click event back into a typed
+  `NodeSelection` or `EdgeSelection`
 
 ### `audio_utils.py`
 

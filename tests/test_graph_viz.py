@@ -10,10 +10,7 @@ graph-viz migration plans) and isn't something a unit test can exercise.
 
 import networkx as nx
 
-from idiomapp.utils.graph_viz import (
-    GRAPH_CATEGORIES,
-    GRAPH_CLICK_JS,
-    RECURSIVE_LEAF_CATEGORIES,
+from idiomapp.utils.graph_models import (
     CategoryPayload,
     CooccurrenceWordPayload,
     EdgePayload,
@@ -23,8 +20,12 @@ from idiomapp.utils.graph_viz import (
     Position,
     RecursiveLeafPayload,
     SemanticWordPayload,
-    SourcedSelection,
+    WordExpansionRequest,
     WordKey,
+)
+from idiomapp.utils.graph_viz import (
+    GRAPH_CATEGORIES,
+    GRAPH_CLICK_JS,
     adjust_color,
     apply_pinned_positions,
     build_cooccurrence_graph,
@@ -99,27 +100,6 @@ def test_adjust_color_lightens_and_clamps():
 def test_graph_categories_and_click_js_are_defined():
     assert len(GRAPH_CATEGORIES) == 5
     assert "dataType" in GRAPH_CLICK_JS
-
-
-def test_recursive_leaf_categories_are_the_two_bare_word_ones():
-    # Deliberately just these two - see the module docstring/comment next to
-    # RECURSIVE_LEAF_CATEGORIES for why cognates are excluded despite also
-    # being structurally single words.
-    assert RECURSIVE_LEAF_CATEGORIES == {"synonyms", "antonyms"}
-
-
-# --------------------------------------------------------------------------
-# WordKey
-# --------------------------------------------------------------------------
-def test_word_key_of_normalizes_like_the_analysis_cache():
-    assert WordKey.of("  Luna ", "es") == WordKey(word="luna", language="es")
-
-
-def test_word_key_is_hashable_for_use_as_a_dict_or_set_member():
-    a = WordKey.of("luna", "es")
-    b = WordKey.of("LUNA", "es")
-    assert a == b
-    assert {a, b} == {a}  # same key, so the set collapses to one
 
 
 # --------------------------------------------------------------------------
@@ -197,15 +177,6 @@ def test_resolve_graph_click_edge():
     assert selection.payload == EdgePayload(kind="cognate")
     assert selection.source_id == "a"
     assert selection.target_id == "b"
-
-
-def test_sourced_selection_pairs_a_selection_with_its_graph():
-    edge_selection = EdgeSelection(
-        payload=EdgePayload(kind="cognate"), source_id="a", target_id="b"
-    )
-    sourced = SourcedSelection(selection=edge_selection, source="cooccurrence")
-    assert sourced.source == "cooccurrence"
-    assert sourced.selection is edge_selection
 
 
 # --------------------------------------------------------------------------
@@ -410,29 +381,27 @@ def test_cooccurrence_node_payload_is_typed():
 LUNA = WordKey.of("luna", "es")
 
 
+def _expand(analysis, *open_categories, word_id_index=None):
+    """Expand LUNA (attached to node "luna_es") with the given categories open."""
+    request = WordExpansionRequest(LUNA, "luna_es", frozenset(open_categories))
+    return build_word_expansion(
+        request,
+        analysis,
+        word_id_index={} if word_id_index is None else word_id_index,
+    )
+
+
 def test_word_expansion_hub_shown_without_expansion():
     # A category hub appears as soon as its word is analyzed, even if the
     # category itself hasn't been toggled open yet - only its leaves wait.
-    nodes, edges = build_word_expansion(
-        LUNA,
-        {"synonyms": [{"term": "astro", "gloss": None}]},
-        attach_node_id="luna_es",
-        expanded_categories=set(),
-        word_id_index={},
-    )
+    nodes, edges = _expand({"synonyms": [{"term": "astro", "gloss": None}]})
     hub_ids = {n.id for n in nodes}
     assert "cat::luna_es::synonyms" in hub_ids
     assert not any(isinstance(n.payload, RecursiveLeafPayload) for n in nodes)
 
 
 def test_word_expansion_leaves_shown_once_expanded():
-    nodes, edges = build_word_expansion(
-        LUNA,
-        {"synonyms": [{"term": "astro", "gloss": None}]},
-        attach_node_id="luna_es",
-        expanded_categories={(LUNA, "synonyms")},
-        word_id_index={},
-    )
+    nodes, edges = _expand({"synonyms": [{"term": "astro", "gloss": None}]}, "synonyms")
     leaf = next(n for n in nodes if isinstance(n.payload, RecursiveLeafPayload))
     assert leaf.payload.word_key == WordKey.of("astro", "es")
     assert leaf.payload.category == "synonyms"
@@ -441,11 +410,9 @@ def test_word_expansion_leaves_shown_once_expanded():
 def test_word_expansion_recursive_leaf_reuses_existing_word_id_index_entry():
     existing_id = "some_other_node_id_for_astro"
     word_id_index = {WordKey.of("astro", "es"): existing_id}
-    nodes, edges = build_word_expansion(
-        LUNA,
+    nodes, edges = _expand(
         {"synonyms": [{"term": "astro", "gloss": None}]},
-        attach_node_id="luna_es",
-        expanded_categories={(LUNA, "synonyms")},
+        "synonyms",
         word_id_index=word_id_index,
     )
     # No new node minted for "astro" - the edge points at the pre-existing id.
@@ -454,12 +421,9 @@ def test_word_expansion_recursive_leaf_reuses_existing_word_id_index_entry():
 
 
 def test_word_expansion_non_recursive_leaf_is_a_plain_leaf_node():
-    nodes, edges = build_word_expansion(
-        LUNA,
+    nodes, edges = _expand(
         {"idioms": [{"term": "estar en la luna", "gloss": "to be spacing out"}]},
-        attach_node_id="luna_es",
-        expanded_categories={(LUNA, "idioms")},
-        word_id_index={},
+        "idioms",
     )
     leaf = next(n for n in nodes if n.payload.kind == "leaf_node")
     assert isinstance(leaf.payload, LeafNodePayload)
@@ -471,12 +435,8 @@ def test_word_expansion_non_recursive_leaf_is_a_plain_leaf_node():
 
 
 def test_word_expansion_cognate_leaf_keeps_word_and_language_separate():
-    nodes, _ = build_word_expansion(
-        LUNA,
-        {"cognates": [{"term": "similar", "gloss": "English"}]},
-        attach_node_id="luna_es",
-        expanded_categories={(LUNA, "cognates")},
-        word_id_index={},
+    nodes, _ = _expand(
+        {"cognates": [{"term": "similar", "gloss": "English"}]}, "cognates"
     )
     leaf = next(n for n in nodes if isinstance(n.payload, LeafNodePayload))
     assert leaf.payload.text == "similar"
@@ -487,13 +447,7 @@ def test_word_expansion_cognate_leaf_keeps_word_and_language_separate():
 def test_word_expansion_str_list_leaf_has_no_gloss():
     # collocations is a plain StrList upstream - never a {term, gloss} pair -
     # so this must stay exactly as it worked before this change.
-    nodes, _ = build_word_expansion(
-        LUNA,
-        {"collocations": ["salir a la luna"]},
-        attach_node_id="luna_es",
-        expanded_categories={(LUNA, "collocations")},
-        word_id_index={},
-    )
+    nodes, _ = _expand({"collocations": ["salir a la luna"]}, "collocations")
     leaf = next(n for n in nodes if isinstance(n.payload, LeafNodePayload))
     assert leaf.payload.text == "salir a la luna"
     assert leaf.payload.gloss is None
@@ -501,25 +455,15 @@ def test_word_expansion_str_list_leaf_has_no_gloss():
 
 def test_word_expansion_caps_leaves_at_eight_per_category():
     analysis = {"synonyms": [{"term": str(i), "gloss": None} for i in range(12)]}
-    nodes, _ = build_word_expansion(
-        LUNA,
-        analysis,
-        attach_node_id="luna_es",
-        expanded_categories={(LUNA, "synonyms")},
-        word_id_index={},
-    )
+    nodes, _ = _expand(analysis, "synonyms")
     leaves = [n for n in nodes if isinstance(n.payload, RecursiveLeafPayload)]
     assert len(leaves) == 8
 
 
 def test_word_expansion_truncates_long_leaf_labels_but_keeps_full_tooltip():
     long_synonym = "a" * 40
-    nodes, _ = build_word_expansion(
-        LUNA,
-        {"synonyms": [{"term": long_synonym, "gloss": None}]},
-        attach_node_id="luna_es",
-        expanded_categories={(LUNA, "synonyms")},
-        word_id_index={},
+    nodes, _ = _expand(
+        {"synonyms": [{"term": long_synonym, "gloss": None}]}, "synonyms"
     )
     leaf = next(n for n in nodes if isinstance(n.payload, RecursiveLeafPayload))
     assert leaf.label == "a" * 27 + "..."
@@ -527,13 +471,7 @@ def test_word_expansion_truncates_long_leaf_labels_but_keeps_full_tooltip():
 
 
 def test_word_expansion_empty_category_produces_no_hub():
-    nodes, _ = build_word_expansion(
-        LUNA,
-        {"synonyms": []},
-        attach_node_id="luna_es",
-        expanded_categories=set(),
-        word_id_index={},
-    )
+    nodes, _ = _expand({"synonyms": []})
     assert nodes == []
 
 
@@ -549,25 +487,13 @@ def test_word_expansion_etymology_is_a_toggleable_category_like_any_other():
         "language_origin": "Latin",
         "root": "luna",
     }
-    nodes_collapsed, _ = build_word_expansion(
-        LUNA,
-        analysis,
-        attach_node_id="luna_es",
-        expanded_categories=set(),
-        word_id_index={},
-    )
+    nodes_collapsed, _ = _expand(analysis)
     hub = next(n for n in nodes_collapsed if isinstance(n.payload, CategoryPayload))
     assert hub.payload.category == "etymology"
     assert hub.tooltip == "from Latin luna"
     assert len(nodes_collapsed) == 1  # hub only, no leaves yet
 
-    nodes_expanded, _ = build_word_expansion(
-        LUNA,
-        analysis,
-        attach_node_id="luna_es",
-        expanded_categories={(LUNA, "etymology")},
-        word_id_index={},
-    )
+    nodes_expanded, _ = _expand(analysis, "etymology")
     leaves = [n for n in nodes_expanded if isinstance(n.payload, LeafNodePayload)]
     assert len(leaves) == 2  # language_origin + root, both inert
 
@@ -575,13 +501,7 @@ def test_word_expansion_etymology_is_a_toggleable_category_like_any_other():
 def test_word_expansion_etymology_hub_shows_with_narrative_but_no_subfields():
     # A hub with a tooltip but zero leaves is still worth showing - the LLM
     # doesn't always break etymology out into language_origin/root.
-    nodes, _ = build_word_expansion(
-        LUNA,
-        {"etymology": "uncertain origin"},
-        attach_node_id="luna_es",
-        expanded_categories={(LUNA, "etymology")},
-        word_id_index={},
-    )
+    nodes, _ = _expand({"etymology": "uncertain origin"}, "etymology")
     assert len(nodes) == 1
     assert nodes[0].tooltip == "uncertain origin"
 
@@ -592,13 +512,7 @@ def test_word_expansion_examples_truncated_to_forty_chars_then_leaf_label_to_27(
     # category gets - a real double-truncation, faithfully carried over from
     # the original pyvis-era behavior.
     long_example = "x" * 50
-    nodes, _ = build_word_expansion(
-        LUNA,
-        {"examples": [long_example]},
-        attach_node_id="luna_es",
-        expanded_categories={(LUNA, "examples")},
-        word_id_index={},
-    )
+    nodes, _ = _expand({"examples": [long_example]}, "examples")
     leaf = next(n for n in nodes if isinstance(n.payload, LeafNodePayload))
     assert leaf.label == "x" * 27 + "..."
     assert leaf.tooltip == "x" * 40 + "..."
@@ -609,13 +523,7 @@ def test_word_expansion_forms_aggregated_from_multiple_keys():
         "plural": "lunas",
         "gender_forms": [{"term": "luna", "gloss": "feminine"}],
     }
-    nodes, _ = build_word_expansion(
-        LUNA,
-        analysis,
-        attach_node_id="luna_es",
-        expanded_categories={(LUNA, "forms")},
-        word_id_index={},
-    )
+    nodes, _ = _expand(analysis, "forms")
     forms_leaves = [n for n in nodes if isinstance(n.payload, LeafNodePayload)]
     labels = [n.label for n in forms_leaves]
     # A plain scalar field (plural) still becomes one pre-formatted label with
@@ -632,9 +540,7 @@ def test_word_expansion_forms_aggregated_from_multiple_keys():
 
 
 def test_word_expansion_empty_analysis_produces_nothing():
-    nodes, edges = build_word_expansion(
-        LUNA, {}, attach_node_id="luna_es", expanded_categories=set(), word_id_index={}
-    )
+    nodes, edges = _expand({})
     assert nodes == []
     assert edges == []
 
@@ -657,7 +563,7 @@ def _base_graph() -> nx.MultiDiGraph:
 def test_compose_attaches_a_word_to_its_matching_base_node():
     base = _base_graph()
     composed = compose_semantic_graph_with_expansions(
-        base, {LUNA: {"synonyms": [{"term": "astro", "gloss": None}]}}, set()
+        base, {LUNA: {"synonyms": [{"term": "astro", "gloss": None}]}}, {}
     )
     assert composed.has_edge("luna_es", "cat::luna_es::synonyms")
 
@@ -666,7 +572,7 @@ def test_compose_skips_a_word_with_no_matching_base_node():
     base = _base_graph()
     ghost_key = WordKey.of("ghost", "es")
     composed = compose_semantic_graph_with_expansions(
-        base, {ghost_key: {"synonyms": [{"term": "spirit", "gloss": None}]}}, set()
+        base, {ghost_key: {"synonyms": [{"term": "spirit", "gloss": None}]}}, {}
     )
     # Nothing crashes, and nothing new is attached - there's no node for
     # "ghost" anywhere in the base graph to hang an expansion off of.
@@ -677,7 +583,7 @@ def test_compose_does_not_mutate_the_base_graph():
     base = _base_graph()
     before = set(base.nodes)
     compose_semantic_graph_with_expansions(
-        base, {LUNA: {"synonyms": [{"term": "astro", "gloss": None}]}}, set()
+        base, {LUNA: {"synonyms": [{"term": "astro", "gloss": None}]}}, {}
     )
     assert set(base.nodes) == before
 
@@ -697,8 +603,8 @@ def test_compose_dedups_a_synonym_shared_by_two_expanded_words():
         LUNA: {"synonyms": [{"term": "astro", "gloss": None}]},
         sol_key: {"synonyms": [{"term": "astro", "gloss": None}]},
     }
-    expanded = {(LUNA, "synonyms"), (sol_key, "synonyms")}
-    composed = compose_semantic_graph_with_expansions(base, analyses, expanded)
+    open_categories = {LUNA: {"synonyms"}, sol_key: {"synonyms"}}
+    composed = compose_semantic_graph_with_expansions(base, analyses, open_categories)
 
     astro_nodes = [
         n
@@ -720,8 +626,8 @@ def test_compose_resolves_two_level_recursion_regardless_of_dict_order():
         astro_key: {"synonyms": [{"term": "estrella", "gloss": None}]},
         LUNA: {"synonyms": [{"term": "astro", "gloss": None}]},
     }
-    expanded = {(LUNA, "synonyms"), (astro_key, "synonyms")}
-    composed = compose_semantic_graph_with_expansions(base, analyses, expanded)
+    open_categories = {LUNA: {"synonyms"}, astro_key: {"synonyms"}}
+    composed = compose_semantic_graph_with_expansions(base, analyses, open_categories)
 
     estrella_key = WordKey.of("estrella", "es")
     assert any(
@@ -740,7 +646,7 @@ def test_compose_skips_a_word_whose_parent_category_is_collapsed():
     }
     # luna's synonyms category is NOT expanded, so astro's own node (and
     # therefore its own expansion) never gets attached this rerun.
-    composed = compose_semantic_graph_with_expansions(base, analyses, set())
+    composed = compose_semantic_graph_with_expansions(base, analyses, {})
     estrella_key = WordKey.of("estrella", "es")
     assert not any(
         isinstance(composed.nodes[n]["styled"].payload, RecursiveLeafPayload)

@@ -1,6 +1,6 @@
-"""Adapters that turn this app's graph data into ECharts graph-series options,
-plus the typed data model the three graphs (Semantic, Co-occurrence, and the
-in-graph word-exploration nodes) are all built from.
+"""Builds the three graphs (Semantic, Co-occurrence, and the in-graph
+word-exploration nodes) out of the typed models in `graph_models.py`, styles
+them, and turns them into ECharts graph-series options.
 
 Pure Python - no `streamlit` or `streamlit_echarts` import here, so every
 function is directly unit-testable. The graph itself is represented as a real
@@ -9,28 +9,40 @@ being built and grown; `graph_to_echarts_data` is the *only* place that graph
 gets flattened into the plain JSON dict a browser-based JS component needs.
 See `docs/graph_data_model.md` for a diagram of how all these types relate.
 
-Two kinds of typed object are used, on purpose:
-- Plain `@dataclass`es (`WordKey`, `Position`, `StyledNode`, `StyledEdge`,
-  `NodeSelection`, `EdgeSelection`) for things that only ever live inside
-  Python and never need to be re-validated from the outside.
-- Pydantic models (every `NodePayload`/`EdgePayload` variant) for the pieces
-  that get sent to the browser as JSON and come back from a click as JSON too
-  - Pydantic's discriminated unions turn "which kind of thing did the user
-  click?" into real, validated parsing instead of hand-written dict digging.
+What the graph *is* lives in `graph_models.py`; this module only adds how
+it's drawn - `StyledNode`/`StyledEdge` are plain dataclasses pairing a model
+payload with its color, size, and tooltip.
 """
 
 import re
 from dataclasses import dataclass, replace
-from typing import Annotated, Any, Literal, Optional, Union
+from typing import Any, Literal, Optional
 
 import networkx as nx
-from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
 from idiomapp.config import (
     GROUP_COLORS,
     LANGUAGE_MAP,
     POS_BORDER_COLORS,
     RELATION_COLORS,
+)
+from idiomapp.utils.graph_models import (
+    RECURSIVE_LEAF_CATEGORIES,
+    CategoryPayload,
+    CooccurrenceWordPayload,
+    EdgePayload,
+    EdgeSelection,
+    GraphSelection,
+    LeafNodePayload,
+    NodePayload,
+    NodeSelection,
+    Position,
+    RecursiveLeafPayload,
+    SemanticWordPayload,
+    WordExpansionRequest,
+    WordKey,
+    parse_edge_payload,
+    parse_node_payload,
 )
 from idiomapp.utils.logging_utils import get_logger
 from idiomapp.utils.nlp_utils import get_language_color
@@ -46,15 +58,6 @@ GRAPH_CATEGORIES = [
     ("collocations", "🔗 Collocations", "#00BCD4"),
 ]
 
-# Which categories are safe to recurse into when a leaf is clicked: synonyms
-# and antonyms are always a single word in the *same* language (see
-# idiomapp.utils.schemas). Cognates look like single words too, but their
-# language is a free-text gloss ("English", "French", ...) this app can't map
-# to a supported language code, so they're deliberately excluded. Everything
-# else (idioms, proverbs, examples, collocations, conjugations, forms) is a
-# phrase or sentence, not a word to re-analyze.
-RECURSIVE_LEAF_CATEGORIES = frozenset({"synonyms", "antonyms"})
-
 # Registered on the frontend via st_echarts(..., events={"click": GRAPH_CLICK_JS}).
 # `params.data` is whatever dict a StyledNode/StyledEdge's to_echarts_dict()
 # produced, including our nested "raw" payload - ECharts passes custom keys
@@ -62,163 +65,6 @@ RECURSIVE_LEAF_CATEGORIES = frozenset({"synonyms", "antonyms"})
 GRAPH_CLICK_JS = (
     "function(params) { return {dataType: params.dataType, ...params.data}; }"
 )
-
-
-# ===========================================================================
-# Typed data model
-# ===========================================================================
-
-
-@dataclass(frozen=True, slots=True)
-class WordKey:
-    """The identity of one (word, language) pair, used everywhere this app
-    needs to remember "have I already analyzed this word" - normalized the
-    same way `analysis_cache`'s own on-disk cache key is (lowercased,
-    whitespace-trimmed), so the two stay in sync without extra bookkeeping.
-    """
-
-    word: str
-    language: str
-
-    @classmethod
-    def of(cls, word: str, language: str) -> "WordKey":
-        """Build a WordKey from raw (possibly mixed-case/padded) input."""
-        return cls(word.strip().lower(), language)
-
-
-@dataclass(frozen=True, slots=True)
-class Position:
-    """A node's on-screen coordinates, captured from a click so it can be
-    held in place (pinned) the next time the graph is redrawn - see
-    `apply_pinned_positions` for why that matters."""
-
-    x: float
-    y: float
-
-
-# ---------------------------------------------------------------------------
-# Node payloads: what a click on a node actually means. Every variant carries
-# a `kind` tag so Pydantic can tell them apart when parsing a click event back
-# from the browser, and so app.py's click-handling code can pattern-match on
-# "what kind of thing was clicked" instead of guessing from loose dict keys.
-# ---------------------------------------------------------------------------
-
-
-class SemanticWordPayload(BaseModel):
-    """A word node from the main translation graph (built from the sentence
-    the user typed in, before any exploration happens) - the app's plain,
-    ordinary "here's a word" node. Clicking one triggers word analysis."""
-
-    kind: Literal["word"] = "word"
-    id: str
-    label: str
-    language: str
-    pos: str
-    details: str
-    node_type: str
-    group: str
-    sentence_group: str = ""
-
-
-class CategoryPayload(BaseModel):
-    """A category hub attached to an analyzed word - e.g. "Synonyms" or
-    "Etymology". Clicking it shows or hides that category's results
-    (a simple on/off toggle, not an analysis trigger)."""
-
-    kind: Literal["category"] = "category"
-    word_key: WordKey
-    category: str
-    label: str
-
-
-class RecursiveLeafPayload(BaseModel):
-    """A leaf result that is itself a real word in the same language (a
-    synonym or antonym) - clicking it analyzes *that* word too and lets
-    exploration continue from there, the same way the original word did."""
-
-    kind: Literal["item"] = "item"
-    word_key: WordKey
-    category: str
-
-
-class LeafNodePayload(BaseModel):
-    """A leaf result that is just information to read - an idiom, an
-    example sentence, an etymology detail, and so on. Clicking it does
-    nothing; it isn't a word the app can meaningfully re-analyze.
-
-    `text` is the term itself (or the whole item, for a category that's just
-    a flat list of strings to begin with). `gloss` is set only for a category
-    where the LLM returned each item as a separate term/gloss pair (e.g. a
-    cognate's word and which language it's a cognate in) - None otherwise."""
-
-    kind: Literal["leaf_node"] = "leaf_node"
-    category: str
-    text: str
-    gloss: Optional[str] = None
-
-
-class CooccurrenceWordPayload(BaseModel):
-    """A word node from the (unrelated, unchanged) Co-occurrence Network
-    graph. Kept as its own typed payload for consistency, even though this
-    graph isn't part of the new exploration feature."""
-
-    kind: Literal["cooccurrence_word"] = "cooccurrence_word"
-    word: str
-    language: Optional[str] = None
-    degree: int
-
-
-NodePayload = Annotated[
-    Union[
-        SemanticWordPayload,
-        CategoryPayload,
-        RecursiveLeafPayload,
-        LeafNodePayload,
-        CooccurrenceWordPayload,
-    ],
-    Field(discriminator="kind"),
-]
-_node_payload_adapter: TypeAdapter = TypeAdapter(NodePayload)
-
-
-class EdgePayload(BaseModel):
-    """What a click on an edge/connection means - always just informational
-    (no edge triggers an action), so unlike nodes every edge kind shares one
-    shape rather than needing its own class."""
-
-    kind: str
-    label: str = ""
-    description: str = ""
-    strength: Optional[float] = None
-    weight: Optional[int] = None
-
-
-def _parse_node_payload(raw: dict) -> Optional[NodePayload]:
-    """Reconstruct a typed NodePayload from the plain dict a browser click
-    hands back. Returns None for anything unrecognized rather than raising -
-    a click that can't be understood should be silently ignored from the
-    user's point of view (no crash), but is logged as a warning: by the time
-    this is called a real click already happened, so a validation failure
-    here means the frontend sent something this app's own code didn't
-    produce (or a payload variant genuinely doesn't match its own schema),
-    which is worth knowing about even though it isn't fatal.
-    """
-    try:
-        return _node_payload_adapter.validate_python(raw)
-    except ValidationError as exc:
-        logger.warning(f"Could not parse a clicked node's data: {exc}")
-        return None
-
-
-def _parse_edge_payload(raw: dict) -> Optional[EdgePayload]:
-    """Reconstruct a typed EdgePayload from the plain dict a browser click
-    hands back, or None (logged as a warning, for the same reason as
-    `_parse_node_payload`) if it doesn't look like a valid edge payload."""
-    try:
-        return EdgePayload.model_validate(raw)
-    except ValidationError as exc:
-        logger.warning(f"Could not parse a clicked edge's data: {exc}")
-        return None
 
 
 # ---------------------------------------------------------------------------
@@ -299,40 +145,6 @@ class StyledEdge:
             "tooltip": {"formatter": self.tooltip},
             "raw": self.payload.model_dump(),
         }
-
-
-@dataclass(frozen=True)
-class NodeSelection:
-    """What a click on a node resolved to: the typed payload describing what
-    was clicked, plus its on-screen position if the browser reported one
-    (used to pin the node in place - see `apply_pinned_positions`)."""
-
-    payload: NodePayload
-    position: Optional[Position] = None
-
-
-@dataclass(frozen=True)
-class EdgeSelection:
-    """What a click on an edge resolved to: its descriptive payload, plus the
-    ids of the two nodes it connects (so the panel can show "X -> Y")."""
-
-    payload: EdgePayload
-    source_id: str
-    target_id: str
-
-
-GraphSelection = Union[NodeSelection, EdgeSelection]
-
-
-@dataclass(frozen=True)
-class SourcedSelection:
-    """A GraphSelection tagged with which graph it came from (the Semantic
-    Graph or the Co-occurrence Network) - kept together so switching between
-    the two graphs' tabs doesn't show a leftover selection from the other
-    one, which would otherwise be confusing rather than just visually off."""
-
-    selection: GraphSelection
-    source: Literal["semantic", "cooccurrence"]
 
 
 # ===========================================================================
@@ -594,11 +406,9 @@ def build_cooccurrence_graph(graph, lang_code: Optional[str] = None) -> nx.Multi
 
 
 def build_word_expansion(
-    word_key: WordKey,
+    request: WordExpansionRequest,
     analysis_data: dict,
     *,
-    attach_node_id: str,
-    expanded_categories: set,
     word_id_index: dict,
 ) -> tuple:
     """Build the category hubs (and, for expanded categories, their leaf
@@ -611,17 +421,18 @@ def build_word_expansion(
     building its own separate graph.
 
     A category hub is always shown once its word is analyzed; its leaves
-    only appear once that category has been toggled open (its
-    (word_key, category) pair is in `expanded_categories`). A leaf that's
-    itself a recursable word (see RECURSIVE_LEAF_CATEGORIES) reuses an
-    existing node for that word if one is already in `word_id_index` -
-    e.g. two different words that share a synonym end up pointing at one
-    shared node, not two separate copies - and registers a freshly-made one
-    otherwise, so later expansions can find and reuse it too.
+    only appear once that category has been toggled open (it's in
+    `request.open_categories`). A leaf that's itself a recursable word (see
+    RECURSIVE_LEAF_CATEGORIES) reuses an existing node for that word if one
+    is already in `word_id_index` - e.g. two different words that share a
+    synonym end up pointing at one shared node, not two separate copies -
+    and registers a freshly-made one otherwise, so later expansions can find
+    and reuse it too.
 
     Returns (new_nodes, new_edges); does not mutate the graph itself -
     that's `compose_semantic_graph_with_expansions`'s job.
     """
+    word_key, attach_node_id = request.word_key, request.attach_node_id
     nodes: list = []
     edges: list = []
     counter = 0
@@ -668,7 +479,7 @@ def build_word_expansion(
                 payload=EdgePayload(kind="category_edge", label=label),
             )
         )
-        if (word_key, category) not in expanded_categories:
+        if category not in request.open_categories:
             return
         for item in items[:8]:
             # An Entries-backed category (e.g. cognates, idioms) hands back
@@ -682,28 +493,18 @@ def build_word_expansion(
                 term, gloss = item, None
             display = term[:27] + "..." if len(term) > 30 else term
             tooltip = f"{term}: {gloss}" if gloss else term
+            payload: Optional[NodePayload] = None  # None: reuse existing node
             if category in RECURSIVE_LEAF_CATEGORIES:
                 leaf_key = WordKey.of(term, word_key.language)
                 node_id = word_id_index.get(leaf_key)
                 if node_id is None:
                     node_id = f"word::{leaf_key.language}::{leaf_key.word}"
                     word_id_index[leaf_key] = node_id
-                    nodes.append(
-                        StyledNode(
-                            id=node_id,
-                            label=display,
-                            symbol_size=20,
-                            symbol="circle",
-                            color=color,
-                            border_color=None,
-                            tooltip=tooltip,
-                            payload=RecursiveLeafPayload(
-                                word_key=leaf_key, category=category
-                            ),
-                        )
-                    )
+                    payload = RecursiveLeafPayload(word_key=leaf_key, category=category)
             else:
                 node_id = leaf_id(hub_id)
+                payload = LeafNodePayload(category=category, text=term, gloss=gloss)
+            if payload is not None:
                 nodes.append(
                     StyledNode(
                         id=node_id,
@@ -713,9 +514,7 @@ def build_word_expansion(
                         color=color,
                         border_color=None,
                         tooltip=tooltip,
-                        payload=LeafNodePayload(
-                            category=category, text=term, gloss=gloss
-                        ),
+                        payload=payload,
                     )
                 )
             edges.append(
@@ -731,23 +530,19 @@ def build_word_expansion(
                 )
             )
 
-    etym_color = "#9B59B6"
     etymology_items = []
-    for sub_key, prefix in (("language_origin", "Origin"), ("root", "Root")):
-        if sub_key in analysis_data:
-            value = analysis_data[sub_key]
-            etymology_items.append(
-                f"{prefix}: {value}" if sub_key == "root" else str(value)
-            )
-    etymology_text = analysis_data.get("etymology")
-    if etymology_items or etymology_text:
-        add_category(
-            "etymology",
-            "📜 Etymology",
-            etym_color,
-            etymology_items,
-            hub_tooltip=etymology_text,
-        )
+    if "language_origin" in analysis_data:
+        etymology_items.append(str(analysis_data["language_origin"]))
+    if "root" in analysis_data:
+        etymology_items.append(f"Root: {analysis_data['root']}")
+    # add_category skips a hub with neither items nor a tooltip.
+    add_category(
+        "etymology",
+        "📜 Etymology",
+        "#9B59B6",
+        etymology_items,
+        hub_tooltip=analysis_data.get("etymology"),
+    )
 
     for key, label, color in GRAPH_CATEGORIES:
         add_category(key, label, color, raw_entries(analysis_data, key))
@@ -799,10 +594,12 @@ def _index_semantic_words(g: nx.MultiDiGraph) -> dict:
 def compose_semantic_graph_with_expansions(
     base: nx.MultiDiGraph,
     analyses: dict,
-    expanded_categories: set,
+    open_categories: dict,
 ) -> nx.MultiDiGraph:
-    """Layer every already-analyzed word's category hubs (and any expanded
+    """Layer every already-analyzed word's category hubs (and any open
     categories' leaves) onto a copy of the base translation graph.
+    `open_categories` maps a WordKey to the set of its categories that are
+    currently toggled open.
 
     Words are added in a small bounded loop rather than a single pass:
     a word can only be attached once we know *where* in the graph to attach
@@ -826,12 +623,13 @@ def compose_semantic_graph_with_expansions(
             attach_node_id = word_id_index.get(word_key)
             if attach_node_id is None:
                 continue
-            new_nodes, new_edges = build_word_expansion(
-                word_key,
-                analysis_data,
+            request = WordExpansionRequest(
+                word_key=word_key,
                 attach_node_id=attach_node_id,
-                expanded_categories=expanded_categories,
-                word_id_index=word_id_index,
+                open_categories=frozenset(open_categories.get(word_key, ())),
+            )
+            new_nodes, new_edges = build_word_expansion(
+                request, analysis_data, word_id_index=word_id_index
             )
             for node in new_nodes:
                 g.add_node(node.id, styled=node)
@@ -994,9 +792,9 @@ def resolve_graph_click(chart_event: Optional[dict]) -> Optional[GraphSelection]
         return None
 
     if data_type == "node":
-        payload = _parse_node_payload(raw)
+        payload = parse_node_payload(raw)
         if payload is None:
-            return None  # already logged inside _parse_node_payload
+            return None  # already logged inside parse_node_payload
         position = None
         x, y = chart_event.get("x"), chart_event.get("y")
         if isinstance(x, (int, float)) and isinstance(y, (int, float)):
@@ -1004,10 +802,10 @@ def resolve_graph_click(chart_event: Optional[dict]) -> Optional[GraphSelection]
         return NodeSelection(payload=payload, position=position)
 
     if data_type == "edge":
-        payload = _parse_edge_payload(raw)
+        payload = parse_edge_payload(raw)
         source_id, target_id = chart_event.get("source"), chart_event.get("target")
         if payload is None:
-            return None  # already logged inside _parse_edge_payload
+            return None  # already logged inside parse_edge_payload
         if not isinstance(source_id, str) or not isinstance(target_id, str):
             logger.warning(
                 f"Clicked edge was missing a source/target id: {chart_event!r}"
