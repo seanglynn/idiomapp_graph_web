@@ -2,53 +2,35 @@
 
 ## Goal
 
-Make IdiomApp's graph an open-ended language exploration experience: users can keep following words, phrases, and sentences, while each backend operation stays bounded and the domain model remains explicit and extensible.
+Keep IdiomApp a single Streamlit app while making the graph's data model explicit: what the graph contains should be defined in one place, separate from how it is built and drawn.
 
-## Priorities
+## Where we are
 
-### 1. Establish canonical typed graph models
-- Audit and build on `idiomapp/utils/schemas.py`, `graph_viz.py`, `graph_storage.py`, and [the current graph data model](graph_data_model.md).
-- Define validated, discriminated models for node types (initially words, phrases, sentences, meanings, and grammar concepts) and edge types (translation/alignment, usage, grammar, semantic, and etymology).
-- Give nodes and edges stable IDs; distinguish word senses where needed.
-- Preserve multiple distinct relationships between the same pair of nodes.
-- Record provenance and, where appropriate, confidence and timestamps.
-- Separate canonical domain data from renderer-specific properties such as coordinates, colours, and sizes. Use the etymology project's [Pydantic models](https://github.com/ofcRS/etymology/blob/main/backend/models.py) as a reference, not as a schema to copy wholesale.
+- Graph element models live inside `idiomapp/utils/graph_viz.py`, mixed with graph building, styling, and ECharts rendering (see [the graph data model](graph_data_model.md)):
+  - identity/geometry: `WordKey`, `Position`
+  - node payloads (Pydantic discriminated union): `SemanticWordPayload`, `CategoryPayload`, `RecursiveLeafPayload`, `LeafNodePayload`, `CooccurrenceWordPayload`
+  - edge payload: `EdgePayload`
+  - click/request objects: `NodeSelection`, `EdgeSelection`, `SourcedSelection`
+- Styling objects (`StyledNode`, `StyledEdge`) are renderer concerns and also live there.
+- LLM response models (`WordAnalysis`, `Translation`, `AlignmentPair`, ...) live in `idiomapp/utils/schemas.py`.
 
-**Done when:** graph payloads are validated and round-trip through JSON; invalid endpoints and unknown types are handled safely; tests cover node variants, edge variants, and parallel relationships.
+## Next: a dedicated graph models file
 
-### 2. Make traversal feel unbounded
-- Users should be able to keep clicking newly discovered words, phrases, and sentences without hitting a visible lifetime depth or node cap.
-- Expand on demand instead of loading the full reachable graph.
-- Apply server-side per-request budgets for result count, traversal work, time, and concurrency as appropriate.
-- Support pagination/cursors for high-degree nodes and return explicit continuation metadata (for example, `has_more` and `next_cursor`).
-- Keep the user's exploration history and graph state when expanding; focusing or hiding branches must not delete explored knowledge.
+- Create `idiomapp/utils/graph_models.py` holding:
+  - **Graph elements:** `WordKey`, `Position`, the `NodePayload` variants and union, `EdgePayload`, and their parse helpers.
+  - **Requests:** the selection objects a click produces (`NodeSelection`, `EdgeSelection`, `SourcedSelection`) and an explicit word-expansion request (the inputs `build_word_expansion` takes today).
+- Keep `StyledNode`/`StyledEdge`, graph building, and ECharts code in `graph_viz.py`, importing from `graph_models.py`.
+- Leave `schemas.py` as the home of LLM response models.
+- No behaviour change: existing call sites and tests keep working (re-export from `graph_viz.py` only if needed during the move).
 
-**Done when:** reaching a backend budget never silently appears to be the end of the graph; the UI can request more results and continue exploring from any returned node.
+**Done when:** `graph_viz.py` defines no Pydantic models; `graph_models.py` has no rendering or networkx code; tests cover JSON round-trip for each node variant, the edge payload, and the expansion request; `graph_data_model.md` points to the new file.
 
-### 3. Standardise graph expansion
-- Define a typed expansion request/response contract with a node ID, optional relationship filters, a bounded page size, and continuation state.
-- Centralise expansion logic behind a service/API boundary, independent of the renderer and underlying data provider.
-- Validate requested limits server-side; add timeouts, caching, and safe handling of partial results.
-- Allow expansion to combine stored graph data with provider-generated discoveries (including etymology) without changing the client contract.
+## Later (not now)
 
-**Done when:** all graph expansion uses the same contract and returns typed nodes/edges plus clear continuation status.
-
-### 4. Render progressively
-- Merge new nodes and edges incrementally, deduplicating by stable ID.
-- Preserve selection, layout, and exploration state as the graph grows.
-- Provide ways to focus on a selected node and reduce visual clutter without imposing a traversal dead end.
-- Keep presentation concerns out of canonical node and edge models.
-
-**Done when:** repeated expansion does not duplicate entities or reset the user's exploration, and larger graphs remain navigable.
-
-## Suggested delivery order
-
-1. Audit existing schemas and graph call sites; document identity and relationship conventions.
-2. Implement canonical node/edge models and integrity/round-trip tests.
-3. Introduce the shared expansion contract, backend budgets, and continuation support.
-4. Update the UI for incremental expansion and preserved exploration state.
-5. Add further node/edge types and external providers incrementally.
+- Stable IDs for nodes and edges (word + language, plus sense where needed).
+- Provenance (LLM, heuristic, stored) on edges.
+- A result limit with a `has_more` flag on expansion, so a limit never looks like the end of the graph.
 
 ## Design principle
 
-**The domain model defines what the graph knows; the traversal layer decides what to fetch; the renderer decides how to show it.** The graph should feel unbounded to the learner, while each operation remains predictable and safe.
+**Models define what the graph knows; `graph_viz.py` decides how to build and show it.** One app, clearly separated layers.
