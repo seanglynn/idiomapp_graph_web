@@ -430,7 +430,7 @@ async def test_claude_falls_back_when_schema_is_rejected():
     import anthropic
     import httpx
 
-    from idiomapp.utils.schemas import WordAnalysis
+    from idiomapp.models import WordAnalysis
 
     client = AnthropicClient("claude-haiku-4-5", api_key="k")
     sdk = MagicMock()
@@ -458,10 +458,10 @@ async def test_claude_falls_back_when_schema_is_rejected():
 async def test_claude_schema_path_returns_canonical_dict():
     """
     Uses `Usage`, not `WordAnalysis`, because that is what real word-analysis calls
-    actually send now - see the `WordAnalysis` docstring in schemas.py for why the
+    actually send now - see the `WordAnalysis` docstring in models/llm.py for why the
     combined model is never itself passed as a structured-output schema.
     """
-    from idiomapp.utils.schemas import Usage
+    from idiomapp.models import Usage
 
     client = AnthropicClient("claude-opus-5", api_key="k")
     parsed = MagicMock()
@@ -495,7 +495,7 @@ async def test_providers_agree_on_shape():
     actually asked for.
     """
     from idiomapp.utils.nlp_utils import _get_llm_word_analysis
-    from idiomapp.utils.schemas import (
+    from idiomapp.models import (
         Grammar,
         LearnerNotes,
         Meaning,

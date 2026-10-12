@@ -3,12 +3,17 @@
 This documents the typed data model behind the Semantic Graph and
 Co-occurrence Network visualizations, and behind clicking a word to explore
 its details (synonyms, etymology, examples, ...) right inside the graph.
-It's split across two modules:
+It's split in two:
 
-- `idiomapp/utils/graph_models.py` - what the graph *is*: graph elements
-  (`WordKey`, `Position`, the `NodePayload` variants, `EdgePayload`) and
-  requests (`NodeSelection`, `EdgeSelection`, `SourcedSelection`,
-  `WordExpansionRequest`). No networkx, no rendering.
+- `idiomapp/models/` - what the graph *is*, one file per kind of model:
+  - `identity.py` - `WordKey`, `Position`
+  - `nodes.py` - the `NodePayload` variants and `parse_node_payload`
+  - `edges.py` - `EdgePayload` and `parse_edge_payload`
+  - `requests.py` - `NodeSelection`, `EdgeSelection`, `SourcedSelection`,
+    `WordExpansionRequest`
+
+  No networkx, no rendering. Import them from the package:
+  `from idiomapp.models import WordKey`.
 - `idiomapp/utils/graph_viz.py` - how it's built and drawn: `StyledNode` /
   `StyledEdge`, graph building, and the ECharts adapters.
 
@@ -178,7 +183,7 @@ classDiagram
 3. `resolve_graph_click` parses that dict back into a `NodeSelection` or
    `EdgeSelection`, reconstructing whichever `NodePayload`/`EdgePayload`
    variant it actually is (via `parse_node_payload`/`parse_edge_payload` in
-   `graph_models.py`). A click that doesn't parse (a malformed or
+   `idiomapp/models/`). A click that doesn't parse (a malformed or
    unrecognized event) is logged and treated as "nothing happened," not a
    crash.
 4. `idiomapp/streamlit/app.py`'s `_dispatch_semantic_graph_click` pattern-

@@ -1,6 +1,6 @@
 """
-Tests for idiomapp/utils/graph_models.py - the typed graph element and request
-models, kept apart from the graph building and rendering in graph_viz.py.
+Tests for the graph models in idiomapp/models/ (identity, nodes, edges,
+requests) - kept apart from the graph building and rendering in graph_viz.py.
 """
 
 import ast
@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from idiomapp.utils import graph_models
-from idiomapp.utils.graph_models import (
+import idiomapp.models
+from idiomapp.models import (
     RECURSIVE_LEAF_CATEGORIES,
     CategoryPayload,
     CooccurrenceWordPayload,
@@ -106,16 +106,16 @@ def test_sourced_selection_pairs_a_selection_with_its_graph():
 
 
 # --------------------------------------------------------------------------
-# Layering: models know nothing about graph building or rendering
+# Layering: no model file knows about graph building or rendering
 # --------------------------------------------------------------------------
-def test_graph_models_does_not_import_graph_building_or_rendering():
-    tree = ast.parse(Path(graph_models.__file__).read_text())
+def test_models_do_not_import_graph_building_or_rendering():
     imported = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imported.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            imported.add(node.module)
+    for path in Path(idiomapp.models.__file__).parent.glob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.Import):
+                imported.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imported.add(node.module)
     forbidden = {
         "networkx",
         "streamlit",

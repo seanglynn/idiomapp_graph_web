@@ -10,7 +10,7 @@ graph-viz migration plans) and isn't something a unit test can exercise.
 
 import networkx as nx
 
-from idiomapp.utils.graph_models import (
+from idiomapp.models import (
     CategoryPayload,
     CooccurrenceWordPayload,
     EdgePayload,

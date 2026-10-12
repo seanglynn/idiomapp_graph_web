@@ -16,11 +16,11 @@ from idiomapp.utils.llm_utils import (
 )
 from idiomapp.utils.ollama_utils import get_available_models
 from idiomapp.utils.async_utils import run_async
-from idiomapp.utils.schemas import AlignmentPair, Translation
 from idiomapp.utils.state_utils import get_llm_client, get_provider_credentials
 from idiomapp.utils.logging_utils import get_logger, get_recent_logs, clear_logs
 from idiomapp.utils.graph_storage import get_graph_storage
-from idiomapp.utils.graph_models import (
+from idiomapp.models import (
+    AlignmentPair,
     CategoryPayload,
     CooccurrenceWordPayload,
     EdgeSelection,
@@ -29,6 +29,7 @@ from idiomapp.utils.graph_models import (
     RecursiveLeafPayload,
     SemanticWordPayload,
     SourcedSelection,
+    Translation,
     WordKey,
 )
 from idiomapp.utils.graph_viz import (
@@ -756,7 +757,7 @@ async def translate_text(
     against `schema` internally (see llm_utils.py); Ollama/OpenAI return raw
     parsed JSON, so the result is re-validated through `Translation` here for
     every provider alike - that's also what makes `Translation.alignment`'s
-    tolerant parsing (schemas.py's `_to_alignment_pairs`) actually run.
+    tolerant parsing (models/llm.py's `_to_alignment_pairs`) actually run.
 
     Args:
         client: The LLM client (Ollama, OpenAI or Anthropic)

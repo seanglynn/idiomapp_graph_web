@@ -16,9 +16,11 @@ Visualizing linguistic connections through interactive graphs and networks.
 ## Project Structure
 
 - `idiomapp/streamlit/`: Main Streamlit application
+- `idiomapp/models/`: Typed models, one file per kind
+  - `identity.py`, `nodes.py`, `edges.py`, `requests.py`: graph elements and the requests a click or expansion makes
+  - `llm.py`: Typed Pydantic schemas for LLM word-analysis output
 - `idiomapp/utils/`: LLM integration, NLP, TTS, state, and logging
   - `llm_utils.py`: LLM client abstractions for Ollama, OpenAI, and Anthropic (Claude)
-  - `schemas.py`: Typed Pydantic schemas for LLM word-analysis output
   - `json_utils.py`: JSON extraction fallback for LLM responses
   - `nlp_utils.py`: NLP processing and graph generation
   - `state_utils.py`: Session state management and caching
