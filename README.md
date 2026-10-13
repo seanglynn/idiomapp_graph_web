@@ -4,8 +4,8 @@
 
 <h3>Translate with an LLM, then explore how words connect across languages.</h3>
 
-[![CI](https://github.com/seanglynn/idiomagraph_graph_web/actions/workflows/ci.yml/badge.svg)](https://github.com/seanglynn/idiomagraph_graph_web/actions/workflows/ci.yml)
-![Version](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fseanglynn%2Fidiomapp_graph_web%2Fmaster%2Fpyproject.toml&query=%24.project.version&label=version&color=blue)
+[![CI](https://github.com/seanglynn/idiomagraph/actions/workflows/ci.yml/badge.svg)](https://github.com/seanglynn/idiomagraph/actions/workflows/ci.yml)
+![Version](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fseanglynn%2Fidiomagraph%2Fmaster%2Fpyproject.toml&query=%24.project.version&label=version&color=blue)
 ![Python 3.12](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)
 ![Streamlit](https://img.shields.io/badge/built%20with-Streamlit-FF4B4B?logo=streamlit&logoColor=white)
 ![uv](https://img.shields.io/badge/managed%20by-uv-DE5FE9)
@@ -55,8 +55,8 @@ Idiomagraph is an interactive language-learning companion built around a graph o
 ### Option A: Docker + Ollama (no API keys)
 
 ```bash
-git clone https://github.com/seanglynn/idiomagraph_graph_web.git
-cd idiomagraph_graph_web
+git clone https://github.com/seanglynn/idiomagraph.git
+cd idiomagraph
 cp env.example .env
 make docker-start
 ```
@@ -138,7 +138,7 @@ flowchart TD
     A --> H{{Category hubs<br/>synonyms · etymology · idioms · ...}}
     H -- click a hub --> L[Leaf results]
     L -- synonym / antonym --> W
-    L -- idiom, example, etymology --> R[Read-only leaf]
+    L -- idiom, example, etymology --> R[leaf]
 ```
 
 1. **Translation.** Each target language gets one concurrent LLM call. The
@@ -165,26 +165,12 @@ Deeper reading:
 <summary><b>📁 Project structure</b></summary>
 
 ```text
-idiomagraph/
-├── config.py              # All settings (pydantic-settings) + language/model tables
-├── streamlit/
-│   └── app.py             # The Streamlit UI
-└── utils/
-    ├── llm_utils.py       # Async LLM clients: Ollama, OpenAI, Anthropic
-    ├── ollama_utils.py    # Ollama health checks + automatic model pull
-    ├── schemas.py         # Pydantic schemas for LLM output (Translation, WordAnalysis)
-    ├── json_utils.py      # Tolerant JSON extraction from raw LLM replies
-    ├── nlp_utils.py       # spaCy/textacy processing, cognates, co-occurrence
-    ├── graph_viz.py       # Graph → ECharts adapters + click resolution
-    ├── graph_storage.py   # Saved graph history (JSON on disk)
-    ├── analysis_cache.py  # Word-analysis cache (JSON on disk)
-    ├── audio_utils.py     # Text-to-speech (gTTS)
-    ├── async_utils.py     # Bridges Streamlit reruns and async clients
-    ├── state_utils.py     # Session state + client caching
-    └── logging_utils.py   # Logging setup + in-app debug log buffer
-tests/                     # pytest suite, including Streamlit AppTest UI tests
-docker/                    # Dockerfile + entrypoint
-docs/                      # In-depth docs and assets
+idiomagraph/    # The app: config, Streamlit UI, and utility modules
+tests/          # pytest suite, including Streamlit AppTest UI tests
+docs/           # In-depth docs and assets
+docker/         # Dockerfile + entrypoint
+.github/        # CI workflow
+.streamlit/     # Local Streamlit server config
 ```
 
 See also [`idiomagraph/utils/README.md`](idiomagraph/utils/README.md) for a per-module API overview.
