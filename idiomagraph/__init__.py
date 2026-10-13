@@ -1,5 +1,5 @@
 """
-IdiomApp - Interactive graph visualization applications.
+IdiomaGraph - Interactive graph visualization applications.
 
 This package contains both a FastAPI web application and a Streamlit application
 for visualizing and analyzing graph data with AI assistance.

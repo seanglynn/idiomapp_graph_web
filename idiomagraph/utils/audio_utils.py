@@ -8,8 +8,8 @@ import base64
 import logging
 from gtts import gTTS
 
-from idiomapp.config import TTS_LANG_CODES, LANGUAGE_MARKERS
-from idiomapp.utils.nlp_utils import detect_language
+from idiomagraph.config import TTS_LANG_CODES, LANGUAGE_MARKERS
+from idiomagraph.utils.nlp_utils import detect_language
 
 # Set up logging
 logger = logging.getLogger(__name__)

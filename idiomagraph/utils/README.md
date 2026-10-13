@@ -74,7 +74,7 @@ The logging system uses LRU cache to efficiently manage logger instances and avo
 ### Usage
 
 ```python
-from idiomapp.utils.logging_utils import get_logger
+from idiomagraph.utils.logging_utils import get_logger
 
 # Get a cached logger instance
 logger = get_logger("module_name")
@@ -86,10 +86,10 @@ logger.info("This is a test message")
 Import the modules as needed:
 
 ```python
-from idiomapp.utils.nlp_utils import analyze_parts_of_speech, split_into_sentences
-from idiomapp.utils.audio_utils import generate_audio
-from idiomapp.utils.llm_utils import LLMClient
-from idiomapp.utils.logging_utils import get_logger
+from idiomagraph.utils.nlp_utils import analyze_parts_of_speech, split_into_sentences
+from idiomagraph.utils.audio_utils import generate_audio
+from idiomagraph.utils.llm_utils import LLMClient
+from idiomagraph.utils.logging_utils import get_logger
 ```
 
 ## Dependencies

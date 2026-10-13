@@ -12,7 +12,7 @@ import json
 
 import pytest
 
-from idiomapp.utils.schemas import (
+from idiomagraph.utils.schemas import (
     AlignmentPair,
     Entry,
     Grammar,

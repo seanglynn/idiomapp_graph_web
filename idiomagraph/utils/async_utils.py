@@ -21,14 +21,14 @@ from typing import Any, Awaitable, TypeVar
 
 import streamlit as st
 
-from idiomapp.utils.logging_utils import get_logger
+from idiomagraph.utils.logging_utils import get_logger
 
 logger = get_logger("async_utils")
 
 T = TypeVar("T")
 
 # Session-state key holding the per-session event loop.
-_LOOP_KEY = "_idiomapp_event_loop"
+_LOOP_KEY = "_idiomagraph_event_loop"
 
 
 def get_event_loop() -> asyncio.AbstractEventLoop:

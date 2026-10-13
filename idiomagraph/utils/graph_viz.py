@@ -26,14 +26,14 @@ from typing import Annotated, Any, Literal, Optional, Union
 import networkx as nx
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
-from idiomapp.config import (
+from idiomagraph.config import (
     GROUP_COLORS,
     LANGUAGE_MAP,
     POS_BORDER_COLORS,
     RELATION_COLORS,
 )
-from idiomapp.utils.logging_utils import get_logger
-from idiomapp.utils.nlp_utils import get_language_color
+from idiomagraph.utils.logging_utils import get_logger
+from idiomagraph.utils.nlp_utils import get_language_color
 
 logger = get_logger("graph_viz")
 
@@ -48,7 +48,7 @@ GRAPH_CATEGORIES = [
 
 # Which categories are safe to recurse into when a leaf is clicked: synonyms
 # and antonyms are always a single word in the *same* language (see
-# idiomapp.utils.schemas). Cognates look like single words too, but their
+# idiomagraph.utils.schemas). Cognates look like single words too, but their
 # language is a free-text gloss ("English", "French", ...) this app can't map
 # to a supported language code, so they're deliberately excluded. Everything
 # else (idioms, proverbs, examples, collocations, conjugations, forms) is a

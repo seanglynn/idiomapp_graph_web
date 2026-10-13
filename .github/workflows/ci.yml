@@ -33,7 +33,7 @@ jobs:
         run: uv run pytest -q
 
       - name: Lint (flake8)
-        run: uv run flake8 idiomapp tests
+        run: uv run flake8 idiomagraph tests
 
       - name: Check formatting (black)
-        run: uv run black --check idiomapp tests
+        run: uv run black --check idiomagraph tests

@@ -46,7 +46,7 @@ class StateManager:
         """Get current application state from session state"""
         if self.state_key not in st.session_state:
             # Initialize with default state
-            from idiomapp.config import settings
+            from idiomagraph.config import settings
 
             st.session_state[self.state_key] = AppStateData(
                 state=AppState.INITIALIZING,
@@ -300,7 +300,7 @@ def get_llm_client():
     # Check if we have a cached client
     if "llm_client" in st.session_state and st.session_state["llm_client"] is not None:
         # Check if the cached client matches current provider/model
-        from idiomapp.config import settings
+        from idiomagraph.config import settings
 
         current_provider = st.session_state.get(
             "llm_provider", settings.llm_provider.value
@@ -330,8 +330,8 @@ def get_llm_client():
 
     # Create new client
     try:
-        from idiomapp.config import settings
-        from idiomapp.utils.llm_utils import LLMClient
+        from idiomagraph.config import settings
+        from idiomagraph.utils.llm_utils import LLMClient
 
         current_provider = st.session_state.get(
             "llm_provider", settings.llm_provider.value

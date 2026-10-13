@@ -1,10 +1,10 @@
 """
-Tests for idiomapp.config settings parsing.
+Tests for idiomagraph.config settings parsing.
 """
 
 import pytest
 
-from idiomapp.config import IdiomaAppSettings, LLMProvider, resolve_anthropic_model
+from idiomagraph.config import IdiomaAppSettings, LLMProvider, resolve_anthropic_model
 
 
 @pytest.mark.parametrize("raw", ["claude", "Claude", "CLAUDE", " claude "])

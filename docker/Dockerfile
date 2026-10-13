@@ -41,8 +41,8 @@ RUN mkdir -p ${HOME}/.streamlit
 # Copy Streamlit configuration
 COPY .streamlit/config.toml ${HOME}/.streamlit/config.toml
 
-# Copy application code (as a package, so `import idiomapp...` resolves)
-COPY idiomapp /app/idiomapp
+# Copy application code (as a package, so `import idiomagraph...` resolves)
+COPY idiomagraph /app/idiomagraph
 
 # Ensure the entrypoint script is executable
 COPY docker/docker-entrypoint.sh /docker-entrypoint.sh

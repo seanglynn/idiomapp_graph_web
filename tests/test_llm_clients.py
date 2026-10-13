@@ -13,8 +13,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from openai import BadRequestError
 
-from idiomapp.config import anthropic_supports_effort, settings
-from idiomapp.utils.llm_utils import (
+from idiomagraph.config import anthropic_supports_effort, settings
+from idiomagraph.utils.llm_utils import (
     AnthropicClient,
     LLMClient,
     OllamaClient,
@@ -39,7 +39,7 @@ def test_create_returns_the_right_client(provider, expected):
 
 def test_create_builds_ollama_client():
     with patch(
-        "idiomapp.utils.llm_utils.get_available_models",
+        "idiomagraph.utils.llm_utils.get_available_models",
         return_value=["llama3.2:latest"],
     ):
         client = LLMClient.create(provider="ollama", model_name="llama3.2:latest")
@@ -47,8 +47,8 @@ def test_create_builds_ollama_client():
 
 
 def test_create_falls_back_to_ollama_for_unknown_provider():
-    with patch("idiomapp.utils.llm_utils.get_available_models", return_value=[]), patch(
-        "idiomapp.utils.llm_utils.pull_model_if_needed", return_value=False
+    with patch("idiomagraph.utils.llm_utils.get_available_models", return_value=[]), patch(
+        "idiomagraph.utils.llm_utils.pull_model_if_needed", return_value=False
     ):
         client = LLMClient.create(provider="not-a-provider")
     assert isinstance(client, OllamaClient)
@@ -145,7 +145,7 @@ async def test_claude_generate_text_returns_content():
     sdk.messages.create = AsyncMock(return_value=_fake_message("hola"))
     client._sdk_client, client._sdk_loop_key = sdk, "fixed"
 
-    with patch("idiomapp.utils.llm_utils.loop_key", return_value="fixed"):
+    with patch("idiomagraph.utils.llm_utils.loop_key", return_value="fixed"):
         assert await client.generate_text("hello") == "hola"
 
 
@@ -159,7 +159,7 @@ async def test_claude_refusal_becomes_an_error_string_not_an_exception():
     )
     client._sdk_client, client._sdk_loop_key = sdk, "fixed"
 
-    with patch("idiomapp.utils.llm_utils.loop_key", return_value="fixed"):
+    with patch("idiomagraph.utils.llm_utils.loop_key", return_value="fixed"):
         result = await client.generate_text("...")
 
     assert result.startswith("Error:")
@@ -189,7 +189,7 @@ async def test_claude_generate_json_uses_structured_output_when_given_a_schema()
     sdk.messages.parse = AsyncMock(return_value=parsed)
     client._sdk_client, client._sdk_loop_key = sdk, "fixed"
 
-    with patch("idiomapp.utils.llm_utils.loop_key", return_value="fixed"):
+    with patch("idiomagraph.utils.llm_utils.loop_key", return_value="fixed"):
         result = await client.generate_json("hi", schema=Translation)
 
     assert result == {"translation": "hola"}
@@ -205,7 +205,7 @@ async def test_claude_generate_json_without_schema_parses_text():
     )
     client._sdk_client, client._sdk_loop_key = sdk, "fixed"
 
-    with patch("idiomapp.utils.llm_utils.loop_key", return_value="fixed"):
+    with patch("idiomagraph.utils.llm_utils.loop_key", return_value="fixed"):
         assert await client.generate_json("hi") == {"translation": "hola"}
 
 
@@ -221,7 +221,7 @@ async def test_openai_generate_json_returns_a_dict():
     sdk.chat.completions.create = AsyncMock(return_value=completion)
     client._sdk_client, client._sdk_loop_key = sdk, "fixed"
 
-    with patch("idiomapp.utils.llm_utils.loop_key", return_value="fixed"):
+    with patch("idiomagraph.utils.llm_utils.loop_key", return_value="fixed"):
         assert await client.generate_json("hi") == {"translation": "hola"}
 
     assert sdk.chat.completions.create.await_args.kwargs["response_format"] == {
@@ -253,7 +253,7 @@ async def test_openai_generate_text_retries_when_capabilities_are_unconfirmed():
     )
     client._sdk_client, client._sdk_loop_key = sdk, "fixed"
 
-    with patch("idiomapp.utils.llm_utils.loop_key", return_value="fixed"):
+    with patch("idiomagraph.utils.llm_utils.loop_key", return_value="fixed"):
         result = await client.generate_text("hi")
 
     assert result == "hola"
@@ -279,7 +279,7 @@ async def test_openai_generate_text_does_not_retry_when_capabilities_are_confirm
     )
     client._sdk_client, client._sdk_loop_key = sdk, "fixed"
 
-    with patch("idiomapp.utils.llm_utils.loop_key", return_value="fixed"):
+    with patch("idiomagraph.utils.llm_utils.loop_key", return_value="fixed"):
         with pytest.raises(BadRequestError):
             await client.generate_text("hi")
 
@@ -313,7 +313,7 @@ async def test_openai_generate_json_also_gets_the_retry_safety_net():
     )
     client._sdk_client, client._sdk_loop_key = sdk, "fixed"
 
-    with patch("idiomapp.utils.llm_utils.loop_key", return_value="fixed"):
+    with patch("idiomagraph.utils.llm_utils.loop_key", return_value="fixed"):
         result = await client.generate_json("hi")
 
     assert result == {"translation": "hola"}
@@ -323,7 +323,7 @@ async def test_openai_generate_json_also_gets_the_retry_safety_net():
 @pytest.mark.asyncio
 async def test_ollama_generate_json_uses_json_format():
     with patch(
-        "idiomapp.utils.llm_utils.get_available_models",
+        "idiomagraph.utils.llm_utils.get_available_models",
         return_value=["llama3.2:latest"],
     ):
         client = OllamaClient("llama3.2:latest")
@@ -334,7 +334,7 @@ async def test_ollama_generate_json_uses_json_format():
     )
     client._sdk_client, client._sdk_loop_key = sdk, "fixed"
 
-    with patch("idiomapp.utils.llm_utils.loop_key", return_value="fixed"), patch.object(
+    with patch("idiomagraph.utils.llm_utils.loop_key", return_value="fixed"), patch.object(
         OllamaClient, "_check_model_availability", return_value=True
     ):
         assert await client.generate_json("hi") == {"translation": "hola"}
@@ -387,7 +387,7 @@ def _capture_request_body(model: str) -> dict:
             http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
         )
         client._sdk_loop_key = "fixed"
-        with patch("idiomapp.utils.llm_utils.loop_key", return_value="fixed"):
+        with patch("idiomagraph.utils.llm_utils.loop_key", return_value="fixed"):
             await client.generate_text("hello", "be terse")
 
     asyncio.run(run())
@@ -430,7 +430,7 @@ async def test_claude_falls_back_when_schema_is_rejected():
     import anthropic
     import httpx
 
-    from idiomapp.utils.schemas import WordAnalysis
+    from idiomagraph.utils.schemas import WordAnalysis
 
     client = AnthropicClient("claude-haiku-4-5", api_key="k")
     sdk = MagicMock()
@@ -446,7 +446,7 @@ async def test_claude_falls_back_when_schema_is_rejected():
     )
     client._sdk_client, client._sdk_loop_key = sdk, "fixed"
 
-    with patch("idiomapp.utils.llm_utils.loop_key", return_value="fixed"):
+    with patch("idiomagraph.utils.llm_utils.loop_key", return_value="fixed"):
         result = await client.generate_json("analyse", schema=WordAnalysis)
 
     assert result == {"definition": "a cat"}
@@ -461,7 +461,7 @@ async def test_claude_schema_path_returns_canonical_dict():
     actually send now - see the `WordAnalysis` docstring in schemas.py for why the
     combined model is never itself passed as a structured-output schema.
     """
-    from idiomapp.utils.schemas import Usage
+    from idiomagraph.utils.schemas import Usage
 
     client = AnthropicClient("claude-opus-5", api_key="k")
     parsed = MagicMock()
@@ -472,7 +472,7 @@ async def test_claude_schema_path_returns_canonical_dict():
     sdk.messages.parse = AsyncMock(return_value=parsed)
     client._sdk_client, client._sdk_loop_key = sdk, "fixed"
 
-    with patch("idiomapp.utils.llm_utils.loop_key", return_value="fixed"):
+    with patch("idiomagraph.utils.llm_utils.loop_key", return_value="fixed"):
         result = await client.generate_json("analyse", schema=Usage)
 
     assert result["idioms"] == [{"term": "dar la lata", "gloss": "to annoy"}]
@@ -494,8 +494,8 @@ async def test_providers_agree_on_shape():
     so its mock must answer according to whichever group schema each call
     actually asked for.
     """
-    from idiomapp.utils.nlp_utils import _get_llm_word_analysis
-    from idiomapp.utils.schemas import (
+    from idiomagraph.utils.nlp_utils import _get_llm_word_analysis
+    from idiomagraph.utils.schemas import (
         Grammar,
         LearnerNotes,
         Meaning,
@@ -507,7 +507,7 @@ async def test_providers_agree_on_shape():
         '{"definition":"a cat","idioms":{"dar la lata":"to annoy"},"synonyms":"felino"}'
     )
 
-    with patch("idiomapp.utils.llm_utils.get_available_models", return_value=["m"]):
+    with patch("idiomagraph.utils.llm_utils.get_available_models", return_value=["m"]):
         ollama_client = OllamaClient("m")
     ollama_sdk = MagicMock()
     ollama_sdk.chat = AsyncMock(return_value={"message": {"content": payload}})
@@ -534,7 +534,7 @@ async def test_providers_agree_on_shape():
     claude_sdk.messages.parse = AsyncMock(side_effect=fake_parse)
     claude_client._sdk_client, claude_client._sdk_loop_key = claude_sdk, "fixed"
 
-    with patch("idiomapp.utils.llm_utils.loop_key", return_value="fixed"), patch.object(
+    with patch("idiomagraph.utils.llm_utils.loop_key", return_value="fixed"), patch.object(
         OllamaClient, "_check_model_availability", return_value=True
     ):
         via_ollama = await _get_llm_word_analysis("gato", "es", "NOUN", ollama_client)
@@ -555,8 +555,8 @@ async def test_spacy_keys_survive_llm_merge():
     """
     import spacy
 
-    from idiomapp.utils.analysis_cache import InMemoryWordAnalysisCache
-    from idiomapp.utils.nlp_utils import analyze_word_linguistics
+    from idiomagraph.utils.analysis_cache import InMemoryWordAnalysisCache
+    from idiomagraph.utils.nlp_utils import analyze_word_linguistics
 
     client = MagicMock()
     client.generate_json = AsyncMock(return_value={"definition": "a cat"})
@@ -565,9 +565,9 @@ async def test_spacy_keys_survive_llm_merge():
     )
 
     with patch(
-        "idiomapp.utils.nlp_utils.load_spacy_model", return_value=spacy.blank("es")
+        "idiomagraph.utils.nlp_utils.load_spacy_model", return_value=spacy.blank("es")
     ), patch(
-        "idiomapp.utils.nlp_utils.get_word_analysis_cache",
+        "idiomagraph.utils.nlp_utils.get_word_analysis_cache",
         return_value=InMemoryWordAnalysisCache(),
     ):
         analysis = await analyze_word_linguistics("gato", "es", client)

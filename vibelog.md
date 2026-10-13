@@ -1,13 +1,13 @@
-# VibeLog - IdiomApp Development Progress & Codebase Evolution
+# VibeLog - IdiomaGraph Development Progress & Codebase Evolution
 
 ## Project Overview
-**IdiomApp** is a multi-language translation and semantic analysis application built with Streamlit, featuring LLM integration (OpenAI/Ollama), NLP processing with spaCy, and interactive graph visualization using Pyvis. The application supports English, Spanish, and Catalan with real-time translation, audio generation, and word relationship analysis.
+**IdiomaGraph** is a multi-language translation and semantic analysis application built with Streamlit, featuring LLM integration (OpenAI/Ollama), NLP processing with spaCy, and interactive graph visualization using Pyvis. The application supports English, Spanish, and Catalan with real-time translation, audio generation, and word relationship analysis.
 
 ## Codebase Architecture
 
 ### **Core Module Structure**
 ```
-idiomapp/
+idiomagraph/
 ├── config.py                 # Centralized configuration with Pydantic settings
 ├── streamlit/
 │   └── app.py               # Main Streamlit application and UI logic
@@ -82,7 +82,7 @@ LANG_MODELS: Dict[str, str] = {
 }
 
 # nlp_utils.py - Updated import
-from idiomapp.config import GROUP_COLORS as LANGUAGE_COLORS, LANG_MODELS
+from idiomagraph.config import GROUP_COLORS as LANGUAGE_COLORS, LANG_MODELS
 
 # Usage remains the same throughout the codebase
 model_name = LANG_MODELS.get(language, "en_core_web_sm")
@@ -554,7 +554,7 @@ def pull_model_if_needed(model_name: str) -> bool:
 ### **Updated Imports**
 ```python
 # llm_utils.py - Now imports from ollama_utils
-from idiomapp.utils.ollama_utils import (
+from idiomagraph.utils.ollama_utils import (
     is_ollama_running,
     get_valid_ollama_host, 
     get_available_models,
@@ -562,8 +562,8 @@ from idiomapp.utils.ollama_utils import (
 )
 
 # app.py - Updated imports
-from idiomapp.utils.ollama_utils import get_available_models
-from idiomapp.utils.llm_utils import LLMClient, get_openai_available_models
+from idiomagraph.utils.ollama_utils import get_available_models
+from idiomagraph.utils.llm_utils import LLMClient, get_openai_available_models
 ```
 
 ## 2025-08-31 - Major Architecture Improvement: Configuration-Driven Model Management ✅

@@ -10,17 +10,17 @@ import streamlit as st
 from streamlit_echarts import st_echarts
 
 # Internal imports
-from idiomapp.utils.llm_utils import (
+from idiomagraph.utils.llm_utils import (
     get_openai_available_models,
     get_anthropic_available_models,
 )
-from idiomapp.utils.ollama_utils import get_available_models
-from idiomapp.utils.async_utils import run_async
-from idiomapp.utils.schemas import AlignmentPair, Translation
-from idiomapp.utils.state_utils import get_llm_client, get_provider_credentials
-from idiomapp.utils.logging_utils import get_logger, get_recent_logs, clear_logs
-from idiomapp.utils.graph_storage import get_graph_storage
-from idiomapp.utils.graph_viz import (
+from idiomagraph.utils.ollama_utils import get_available_models
+from idiomagraph.utils.async_utils import run_async
+from idiomagraph.utils.schemas import AlignmentPair, Translation
+from idiomagraph.utils.state_utils import get_llm_client, get_provider_credentials
+from idiomagraph.utils.logging_utils import get_logger, get_recent_logs, clear_logs
+from idiomagraph.utils.graph_storage import get_graph_storage
+from idiomagraph.utils.graph_viz import (
     GRAPH_CLICK_JS,
     CategoryPayload,
     CooccurrenceWordPayload,
@@ -41,13 +41,13 @@ from idiomapp.utils.graph_viz import (
     graph_to_echarts_data,
     resolve_graph_click,
 )
-from idiomapp.config import (
+from idiomagraph.config import (
     settings,
     LANGUAGE_MAP,
     LLMProvider,
     resolve_anthropic_model,
 )
-from idiomapp.utils.nlp_utils import (
+from idiomagraph.utils.nlp_utils import (
     split_into_sentences,
     build_word_cooccurrence_network,
     detect_language,
@@ -57,7 +57,7 @@ from idiomapp.utils.nlp_utils import (
     add_cross_language_relationships,
     merge_language_graphs,
 )
-from idiomapp.utils.audio_utils import generate_audio, process_translation_audio
+from idiomagraph.utils.audio_utils import generate_audio, process_translation_audio
 
 # Set up logging
 logger = get_logger("streamlit_app")
@@ -67,7 +67,7 @@ logger = get_logger("streamlit_app")
 
 # Set up page configuration - use Streamlit's native theming
 st.set_page_config(
-    page_title="Idiomapp",
+    page_title="Idiomagraph",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
@@ -1133,7 +1133,7 @@ def get_fallback_help_content():
     This is used when the documentation files can't be found.
     """
     return """
-    # Language Graphs in Idiomapp
+    # Language Graphs in Idiomagraph
 
     Visualizing language connections through powerful interactive networks!
 
@@ -1144,7 +1144,7 @@ def get_fallback_help_content():
     - **Nodes** = words in different languages
     - **Edges** = translation relationships and meaning connections
 
-    When you translate text in Idiomapp, it creates a semantic network that shows:
+    When you translate text in Idiomagraph, it creates a semantic network that shows:
 
     - Direct translations between languages (e.g., "dog" → "perro")
     - Related words within each language
@@ -2136,7 +2136,7 @@ def _render_debug_and_help_sections() -> None:
             4. Click "Translate" to see the translations
             5. Explore the word relationships in either the semantic graph or co-occurrence network views
 
-            **Example**: Try translating "Do you know my country?" from {get_language_name("en")} to both {get_language_name("es")} and {get_language_name("ca")}
+            **Example**: Try translating "Take me to the moon and let me play among the stars" from {get_language_name("en")} to both {get_language_name("es")} and {get_language_name("ca")}
             """
             )
             if st.button("Dismiss", key="dismiss_help"):

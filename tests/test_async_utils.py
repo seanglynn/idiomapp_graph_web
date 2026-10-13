@@ -1,5 +1,5 @@
 """
-Tests for idiomapp/utils/async_utils.py.
+Tests for idiomagraph/utils/async_utils.py.
 
 `AppTest`-based, not plain pytest functions: `get_event_loop`/`run_async` read
 and write `st.session_state`, which behaves like a real per-session dict only
@@ -10,7 +10,7 @@ from streamlit.testing.v1 import AppTest
 
 _BASELINE_SCRIPT = """
 import streamlit as st
-from idiomapp.utils.async_utils import run_async
+from idiomagraph.utils.async_utils import run_async
 
 async def fast():
     return "fast-done"
@@ -40,7 +40,7 @@ import threading
 import time
 
 import streamlit as st
-from idiomapp.utils.async_utils import run_async, get_event_loop
+from idiomagraph.utils.async_utils import run_async, get_event_loop
 
 loop = get_event_loop()
 

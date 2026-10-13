@@ -1,10 +1,11 @@
 <div align="center">
 
-<img src="docs/assets/logo.jpg" alt="Idiomapp" width="600">
+<img src="docs/assets/logo.jpg" alt="Idiomagraph" width="600">
 
 <h3>Translate with an LLM, then explore how words connect across languages.</h3>
 
-[![CI](https://github.com/seanglynn/idiomapp_graph_web/actions/workflows/ci.yml/badge.svg)](https://github.com/seanglynn/idiomapp_graph_web/actions/workflows/ci.yml)
+[![CI](https://github.com/seanglynn/idiomagraph_graph_web/actions/workflows/ci.yml/badge.svg)](https://github.com/seanglynn/idiomagraph_graph_web/actions/workflows/ci.yml)
+![Version](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fseanglynn%2Fidiomapp_graph_web%2Fmaster%2Fpyproject.toml&query=%24.project.version&label=version&color=blue)
 ![Python 3.12](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)
 ![Streamlit](https://img.shields.io/badge/built%20with-Streamlit-FF4B4B?logo=streamlit&logoColor=white)
 ![uv](https://img.shields.io/badge/managed%20by-uv-DE5FE9)
@@ -19,24 +20,17 @@
 [Troubleshooting](#-troubleshooting)
 
 <!-- Add a screenshot or GIF of the app at docs/assets/screenshot.png -->
-<img src="docs/assets/screenshot.png" alt="Idiomapp: a translation alongside its interactive semantic graph" width="900">
+<img src="docs/assets/screenshot.png" alt="Idiomagraph: a translation alongside its interactive semantic graph" width="900">
 
 </div>
 
 ---
 
-## 💡 What is Idiomapp?
+## 💡 What is Idiomagraph?
 
-Idiomapp is a language-learning companion that runs in your browser. Type a
-sentence, pick one or more target languages, and an LLM translates it. Idiomapp
-then turns the result into an **interactive graph**. You see which word maps to
-which, which words look alike across languages, and which words travel together.
-Click any word to grow its meaning, etymology, grammar, idioms and pronunciation
-right into the graph.
+Idiomagraph is an interactive language-learning companion built around a graph of words, phrases, and their connections across languages. Explore translations, cognates, shared roots, false friends, grammar, idioms, and pronunciation all in one visual space.
 
-**Why?** Learning several related languages at once is faster when you can *see*
-the connections between them. A shared root, a cognate, a false friend or a
-recurring collocation is much easier to remember as a picture than as a list.
+**Why?** Languages are easier to understand when you can see how they connect. Idiomagraph turns those connections into an explorable graph, helping you discover relationships, follow your curiosity, and build a deeper understanding of language.
 
 ## ✨ Features
 
@@ -61,8 +55,8 @@ recurring collocation is much easier to remember as a picture than as a list.
 ### Option A: Docker + Ollama (no API keys)
 
 ```bash
-git clone https://github.com/seanglynn/idiomapp_graph_web.git
-cd idiomapp_graph_web
+git clone https://github.com/seanglynn/idiomagraph_graph_web.git
+cd idiomagraph_graph_web
 cp env.example .env
 make docker-start
 ```
@@ -71,7 +65,7 @@ Open **http://localhost:8503**. The first translation is slow because the
 configured Ollama model (`llama3.2:latest` by default) is pulled into
 `./ollama-models/`. Later runs reuse that download.
 
-### Option B: Docker + Claude or OpenAI
+### Option B: Docker + Claude
 
 ```bash
 cp env.example .env
@@ -80,8 +74,8 @@ cp env.example .env
 Edit `.env` and set the provider and key:
 
 ```dotenv
-LLM_PROVIDER=anthropic          # or: openai
-ANTHROPIC_API_KEY=sk-ant-...    # or: OPENAI_API_KEY=sk-...
+LLM_PROVIDER=anthropic
+ANTHROPIC_API_KEY=sk-ant-...
 ```
 
 ```bash
@@ -90,32 +84,28 @@ make docker-start
 
 Open **http://localhost:8503**. The Ollama container still starts, but it isn't used.
 
-### Option C: Run locally with uv
+### Option C: Docker + OpenAI
 
 ```bash
 cp env.example .env
 ```
 
-In `.env`, point the app at your local services:
+Edit `.env` and set the provider and key:
 
 ```dotenv
-OLLAMA_HOST=http://localhost:11434   # env.example ships the Docker value
-# ...or use a hosted provider instead:
-# LLM_PROVIDER=anthropic
-# ANTHROPIC_API_KEY=sk-ant-...
+LLM_PROVIDER=openai
+OPENAI_API_KEY=sk-...
 ```
 
 ```bash
-make install         # uv sync
-make run-graph-dev   # streamlit with auto-reload
+make docker-start
 ```
 
-Open **http://localhost:8503**. On the first run, spaCy downloads the language
-models it needs. This takes a minute, and only happens once.
+Open **http://localhost:8503**. The Ollama container still starts, but it isn't used.
 
 > [!TIP]
-> Using Ollama locally? Start it first with `ollama serve`. Idiomapp pulls the
-> configured model for you if it isn't installed yet.
+> Working on the code? See [Development mode](#development-mode-run-locally-with-uv)
+> to run the app locally with uv and auto-reload.
 
 ## 🧭 Using the app
 
@@ -136,30 +126,25 @@ models it needs. This takes a minute, and only happens once.
    sidebar. You can search, reload or delete them there.
 
 > [!NOTE]
-> Want a sentence to try? *"Do you know my country?"* into two target languages
+> Want a sentence to try? Drop *"Take me to the moon and let me play among the stars"* into two target languages
 > gives a small, readable graph with clear translation and cognate links.
 
 ## 🔬 How it works
 
 ```mermaid
 flowchart TD
-    A["✍️ Source text"] --> B["🤖 LLM translate<br/><i>JSON: translation + word alignment</i>"]
-    B --> C{"Pydantic<br/>Translation schema"}
-    C --> D["🧠 spaCy + textacy<br/><i>sentences, POS, lemmas</i>"]
-    D --> E["🕸️ Build graph<br/><i>translation · cognate · cross-language edges</i>"]
-    E --> F["networkx MultiDiGraph"]
-    F --> G["📊 ECharts<br/><i>via streamlit-echarts</i>"]
-    G -- "click a word" --> H["🤖 LLM word analysis<br/><i>WordAnalysis schema</i>"]
-    H --> I[("💾 word_analysis_cache/")]
-    H -- "expand categories" --> F
-    D --> J["📈 Co-occurrence network<br/><i>windowed, POS-filtered</i>"]
-    J --> G
+    T[Translate a sentence] --> W((Word node))
+    W -- click --> A[LLM word analysis<br/>cached on disk]
+    A --> H{{Category hubs<br/>synonyms · etymology · idioms · ...}}
+    H -- click a hub --> L[Leaf results]
+    L -- synonym / antonym --> W
+    L -- idiom, example, etymology --> R[Read-only leaf]
 ```
 
 1. **Translation.** Each target language gets one concurrent LLM call. The
    model returns JSON with the translation *and* a word-level alignment
    (`source_word → target_word`). This is validated by the `Translation`
-   schema in `idiomapp/utils/schemas.py`, the same way for every provider.
+   schema in `idiomagraph/utils/schemas.py`, the same way for every provider.
 2. **NLP.** spaCy and textacy split the texts into sentences and tag parts of
    speech.
 3. **Semantic graph.** Aligned word pairs become **translation** edges. An
@@ -180,7 +165,7 @@ Deeper reading:
 <summary><b>📁 Project structure</b></summary>
 
 ```text
-idiomapp/
+idiomagraph/
 ├── config.py              # All settings (pydantic-settings) + language/model tables
 ├── streamlit/
 │   └── app.py             # The Streamlit UI
@@ -202,7 +187,7 @@ docker/                    # Dockerfile + entrypoint
 docs/                      # In-depth docs and assets
 ```
 
-See also [`idiomapp/utils/README.md`](idiomapp/utils/README.md) for a per-module API overview.
+See also [`idiomagraph/utils/README.md`](idiomagraph/utils/README.md) for a per-module API overview.
 
 </details>
 
@@ -235,11 +220,11 @@ default. Provider, model and API keys can also be changed from the sidebar's
 > Switch to `claude-opus-5` for higher-quality word analyses. Claude models don't
 > accept `temperature`, so response depth is controlled by `ANTHROPIC_EFFORT`.
 > That setting only applies to models that support it (see
-> `ANTHROPIC_MODEL_CAPABILITIES` in [`idiomapp/config.py`](idiomapp/config.py)).
+> `ANTHROPIC_MODEL_CAPABILITIES` in [`idiomagraph/config.py`](idiomagraph/config.py)).
 
 ### Reference
 
-Defaults below are the built-in values from `idiomapp/config.py`.
+Defaults below are the built-in values from `idiomagraph/config.py`.
 
 #### General
 
@@ -327,12 +312,12 @@ These languages are currently configured:
 |---|---|---|---|
 | `en` | 🇬🇧 English | `en_core_web_sm` | English |
 | `es` | 🇪🇸 Spanish | `es_core_news_sm` | Spanish |
-| `ca` | 🏴󠁥󠁳󠁣󠁴󠁿 Catalan | `ca_core_news_sm` | Spanish *(gTTS has no Catalan voice)* |
+| `ca` | 🏴󠁥󠁳󠁣󠁴󠁿 Catalan | `ca_core_news_sm` | Spanish |
 
 <details>
 <summary><b>Adding a language</b></summary>
 
-All of the following live in [`idiomapp/config.py`](idiomapp/config.py) unless noted:
+All of the following live in [`idiomagraph/config.py`](idiomagraph/config.py) unless noted:
 
 1. Add an entry to `LANGUAGE_MAP` (name, flag, TTS code).
 2. Add its spaCy model to `LANG_MODELS`. Pick one from [spacy.io/models](https://spacy.io/models).
@@ -345,7 +330,7 @@ All of the following live in [`idiomapp/config.py`](idiomapp/config.py) unless n
 
 ## 💾 Data & persistence
 
-Everything Idiomapp stores stays on your machine, in the repo directory. All of
+Everything Idiomagraph stores stays on your machine, in the repo directory. All of
 it is git-ignored:
 
 | Path | Contents |
@@ -359,6 +344,35 @@ To wipe saved graphs, use **🗑️ Clear All Data** in the sidebar's Graph Hist
 For the other folders, delete them by hand.
 
 ## 🧪 Development
+
+### Development mode: run locally with uv
+
+```bash
+cp env.example .env
+```
+
+In `.env`, point the app at your local services:
+
+```dotenv
+OLLAMA_HOST=http://localhost:11434   # env.example ships the Docker value
+# ...or use a hosted provider instead:
+# LLM_PROVIDER=anthropic
+# ANTHROPIC_API_KEY=sk-ant-...
+```
+
+```bash
+make install         # uv sync
+make run-graph-dev   # streamlit with auto-reload
+```
+
+Open **http://localhost:8503**. On the first run, spaCy downloads the language
+models it needs. This takes a minute, and only happens once.
+
+> [!TIP]
+> Using Ollama locally? Start it first with `ollama serve`. Idiomagraph pulls the
+> configured model for you if it isn't installed yet.
+
+### Tests and lint
 
 ```bash
 make install   # install all dependencies with uv
@@ -378,7 +392,7 @@ blank pipeline.
 |---|---|
 | `make install` | `uv sync` |
 | `make run-graph-dev` | Run locally with auto-reload on save |
-| `make run-graph` | Run locally via `python -m idiomapp.streamlit.app` |
+| `make run-graph` | Run locally via `python -m idiomagraph.streamlit.app` |
 | `make test` | Run the pytest suite |
 | `make lint` | flake8 + black formatting check |
 | `make format` | Format with black |
@@ -466,7 +480,7 @@ When you run locally, Streamlit listens on all network interfaces by default. To
 keep it on your machine only, run:
 
 ```bash
-uv run streamlit run idiomapp/streamlit/app.py --server.address=localhost
+uv run streamlit run idiomagraph/streamlit/app.py --server.address=localhost
 ```
 
 ## 🙏 Built with

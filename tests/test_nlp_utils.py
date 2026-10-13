@@ -1,5 +1,5 @@
 """
-Tests for idiomapp/utils/nlp_utils.py's cross-language relationship detection.
+Tests for idiomagraph/utils/nlp_utils.py's cross-language relationship detection.
 
 `detect_cognate` is pure string logic - no spaCy involved. `process_sentence_pair`
 does call spaCy (via `analyze_parts_of_speech`) to tokenize each sentence first,
@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 import spacy
 
-from idiomapp.utils.nlp_utils import detect_cognate, process_sentence_pair
+from idiomagraph.utils.nlp_utils import detect_cognate, process_sentence_pair
 
 
 # --------------------------------------------------------------------------
@@ -65,7 +65,7 @@ def _edges_between(graph_data, relation):
 def test_process_sentence_pair_draws_a_translation_edge_from_alignment():
     graph_data = {"nodes": [], "edges": []}
     with patch(
-        "idiomapp.utils.nlp_utils.load_spacy_model", side_effect=_blank_pipeline
+        "idiomagraph.utils.nlp_utils.load_spacy_model", side_effect=_blank_pipeline
     ):
         process_sentence_pair(
             "The moon is beautiful",
@@ -89,7 +89,7 @@ def test_process_sentence_pair_draws_a_translation_edge_from_alignment():
 def test_process_sentence_pair_draws_a_cognate_edge_independent_of_alignment():
     graph_data = {"nodes": [], "edges": []}
     with patch(
-        "idiomapp.utils.nlp_utils.load_spacy_model", side_effect=_blank_pipeline
+        "idiomagraph.utils.nlp_utils.load_spacy_model", side_effect=_blank_pipeline
     ):
         process_sentence_pair(
             "Some nation",
@@ -110,7 +110,7 @@ def test_process_sentence_pair_draws_a_cognate_edge_independent_of_alignment():
 def test_process_sentence_pair_a_pair_can_be_both_translation_and_cognate():
     graph_data = {"nodes": [], "edges": []}
     with patch(
-        "idiomapp.utils.nlp_utils.load_spacy_model", side_effect=_blank_pipeline
+        "idiomagraph.utils.nlp_utils.load_spacy_model", side_effect=_blank_pipeline
     ):
         process_sentence_pair(
             "Some nation",
@@ -134,7 +134,7 @@ def test_process_sentence_pair_a_pair_can_be_both_translation_and_cognate():
 def test_process_sentence_pair_unrelated_pair_gets_no_edge():
     graph_data = {"nodes": [], "edges": []}
     with patch(
-        "idiomapp.utils.nlp_utils.load_spacy_model", side_effect=_blank_pipeline
+        "idiomagraph.utils.nlp_utils.load_spacy_model", side_effect=_blank_pipeline
     ):
         process_sentence_pair(
             "The moon",

@@ -1,6 +1,6 @@
 # Graph data model
 
-This documents the typed data model behind `idiomapp/utils/graph_viz.py` -
+This documents the typed data model behind `idiomagraph/utils/graph_viz.py` -
 the module that turns this app's word/translation data into the Semantic
 Graph and Co-occurrence Network visualizations, and that powers clicking a
 word to explore its details (synonyms, etymology, examples, ...) right
@@ -167,7 +167,7 @@ classDiagram
    variant it actually is. A click that doesn't parse (a malformed or
    unrecognized event) is logged and treated as "nothing happened," not a
    crash.
-3. `idiomapp/streamlit/app.py`'s `_dispatch_semantic_graph_click` pattern-
+3. `idiomagraph/streamlit/app.py`'s `_dispatch_semantic_graph_click` pattern-
    matches on the payload type to decide what a click *means*:
    - `SemanticWordPayload` / `RecursiveLeafPayload` → analyze this word
      (through the same cache-backed `analyze_word_linguistics` call the

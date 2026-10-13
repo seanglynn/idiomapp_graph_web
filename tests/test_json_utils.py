@@ -1,5 +1,5 @@
 """
-Tests for `idiomapp.utils.json_utils.extract_json`.
+Tests for `idiomagraph.utils.json_utils.extract_json`.
 
 This is the salvage path used only when a provider's own JSON guarantee wasn't
 enough (Ollama wrapping output despite `format="json"`, or Claude's unconstrained
@@ -8,7 +8,7 @@ fallback) - it is not the primary parsing path for any provider.
 
 import json
 
-from idiomapp.utils.json_utils import extract_json
+from idiomagraph.utils.json_utils import extract_json
 
 
 def test_parses_plain_json():

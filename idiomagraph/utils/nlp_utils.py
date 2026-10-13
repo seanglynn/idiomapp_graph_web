@@ -18,9 +18,9 @@ from langdetect import detect, LangDetectException
 # Color scheme imported from central config
 from pydantic import ValidationError
 
-from idiomapp.config import GROUP_COLORS as LANGUAGE_COLORS, LANG_MODELS
-from idiomapp.utils.schemas import WordAnalysis, WORD_ANALYSIS_GROUPS, prompt_example
-from idiomapp.utils.analysis_cache import get_word_analysis_cache
+from idiomagraph.config import GROUP_COLORS as LANGUAGE_COLORS, LANG_MODELS
+from idiomagraph.utils.schemas import WordAnalysis, WORD_ANALYSIS_GROUPS, prompt_example
+from idiomagraph.utils.analysis_cache import get_word_analysis_cache
 
 # Setup logging
 logger = logging.getLogger(__name__)
@@ -702,7 +702,7 @@ def process_sentence_pair(
 
     alignment_pairs: a set of (source_word, target_word) tuples, lowercased,
     that the translation LLM reported as corresponding to each other - see
-    `idiomapp.streamlit.app.analyze_translation`. Used to draw `translation`
+    `idiomagraph.streamlit.app.analyze_translation`. Used to draw `translation`
     edges; independently, `detect_cognate` draws `cognate` edges wherever two
     words look alike, regardless of alignment - a pair can honestly be both,
     or either, so both checks always run.

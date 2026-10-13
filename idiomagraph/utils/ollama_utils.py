@@ -1,8 +1,8 @@
 import ollama
 import time
 import os
-from idiomapp.utils.logging_utils import get_logger
-from idiomapp.config import settings  # Import the global config
+from idiomagraph.utils.logging_utils import get_logger
+from idiomagraph.config import settings  # Import the global config
 import httpx
 import requests
 import threading
@@ -387,7 +387,7 @@ class OllamaClient:
                         f"Failed to automatically pull model: {str(pull_error)}"
                     )
                     logger.warning(
-                        f"Model {self.model_name} not available. You can pull it manually with: 'docker exec -it idiomapp-ollama ollama pull {self.model_name}'"
+                        f"Model {self.model_name} not available. You can pull it manually with: 'docker exec -it idiomagraph-ollama ollama pull {self.model_name}'"
                     )
                     OllamaClient._model_available_cache[self.model_name] = False
         except Exception as e:
@@ -499,7 +499,7 @@ class OllamaClient:
                     f"\n\nThe model '{self.model_name}' needs to be downloaded first."
                 )
                 error_msg += "\nRun these commands in your terminal:"
-                error_msg += "\n  1. docker exec -it idiomapp-ollama /bin/bash"
+                error_msg += "\n  1. docker exec -it idiomagraph-ollama /bin/bash"
                 error_msg += f"\n  2. ollama pull {self.model_name}"
 
             logger.error(error_msg)
