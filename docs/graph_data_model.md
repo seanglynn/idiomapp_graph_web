@@ -1,17 +1,28 @@
 # Graph data model
 
-This documents the typed data model behind `idiomapp/utils/graph_viz.py` -
-the module that turns this app's word/translation data into the Semantic
-Graph and Co-occurrence Network visualizations, and that powers clicking a
-word to explore its details (synonyms, etymology, examples, ...) right
-inside the graph.
+This documents the typed data model behind the Semantic Graph and
+Co-occurrence Network visualizations, and behind clicking a word to explore
+its details (synonyms, etymology, examples, ...) right inside the graph.
+It's split in two:
+
+- `idiomapp/models/` - what the graph *is*, one file per kind of model:
+  - `identity.py` - `WordKey`, `Position`
+  - `nodes.py` - the `NodePayload` variants and `parse_node_payload`
+  - `edges.py` - `EdgePayload` and `parse_edge_payload`
+  - `requests.py` - `NodeSelection`, `EdgeSelection`, `SourcedSelection`,
+    `WordExpansionRequest`
+
+  No networkx, no rendering. Import them from the package:
+  `from idiomapp.models import WordKey`.
+- `idiomapp/utils/graph_viz.py` - how it's built and drawn: `StyledNode` /
+  `StyledEdge`, graph building, and the ECharts adapters.
 
 ## Two kinds of typed object, on purpose
 
 - **Plain Python `@dataclass`es** (`WordKey`, `Position`, `StyledNode`,
-  `StyledEdge`, `NodeSelection`, `EdgeSelection`, `SourcedSelection`) for
-  things that only ever live inside this app's own Python code and never
-  need to be re-checked from the outside.
+  `StyledEdge`, `NodeSelection`, `EdgeSelection`, `SourcedSelection`,
+  `WordExpansionRequest`) for things that only ever live inside this app's
+  own Python code and never need to be re-checked from the outside.
 - **Pydantic models** (every `NodePayload`/`EdgePayload` variant) for the
   pieces that get sent to the browser as JSON and come back from a click as
   JSON too. Pydantic's *discriminated unions* - a `kind` field that says
@@ -150,6 +161,13 @@ classDiagram
     EdgeSelection *-- EdgePayload : payload
     SourcedSelection *-- NodeSelection
     SourcedSelection *-- EdgeSelection
+
+    class WordExpansionRequest {
+      +word_key: WordKey
+      +attach_node_id: str
+      +open_categories: frozenset~str~
+    }
+    WordExpansionRequest *-- WordKey : word_key
 ```
 
 ## How a click becomes exploration
@@ -162,12 +180,13 @@ classDiagram
 2. The browser sends that same `"raw"` dict straight back when the user
    clicks it (`GRAPH_CLICK_JS`, in `graph_viz.py`, just spreads the item's
    own data - it never has to know what's inside `"raw"`).
-2. `resolve_graph_click` parses that dict back into a `NodeSelection` or
+3. `resolve_graph_click` parses that dict back into a `NodeSelection` or
    `EdgeSelection`, reconstructing whichever `NodePayload`/`EdgePayload`
-   variant it actually is. A click that doesn't parse (a malformed or
+   variant it actually is (via `parse_node_payload`/`parse_edge_payload` in
+   `idiomapp/models/`). A click that doesn't parse (a malformed or
    unrecognized event) is logged and treated as "nothing happened," not a
    crash.
-3. `idiomapp/streamlit/app.py`'s `_dispatch_semantic_graph_click` pattern-
+4. `idiomapp/streamlit/app.py`'s `_dispatch_semantic_graph_click` pattern-
    matches on the payload type to decide what a click *means*:
    - `SemanticWordPayload` / `RecursiveLeafPayload` → analyze this word
      (through the same cache-backed `analyze_word_linguistics` call the
@@ -176,8 +195,9 @@ classDiagram
      case nothing happens at all.
    - `CategoryPayload` → toggle that category's results open or closed.
    - `LeafNodePayload` → nothing; it's a phrase or sentence, not a word.
-4. `build_word_expansion` and `compose_semantic_graph_with_expansions`
-   (both in `graph_viz.py`) turn the accumulated analyses and expanded
-   categories into new `StyledNode`/`StyledEdge` objects layered onto the
-   base translation graph, ready to flatten and send back to the browser
-   on the next redraw.
+5. `compose_semantic_graph_with_expansions` (in `graph_viz.py`) builds one
+   `WordExpansionRequest` per analyzed word - which word, the node to attach
+   it to, and which of its categories are open - and `build_word_expansion`
+   turns each request into new `StyledNode`/`StyledEdge` objects layered
+   onto the base translation graph, ready to flatten and send back to the
+   browser on the next redraw.

@@ -16,12 +16,11 @@ from idiomapp.utils.llm_utils import (
 )
 from idiomapp.utils.ollama_utils import get_available_models
 from idiomapp.utils.async_utils import run_async
-from idiomapp.utils.schemas import AlignmentPair, Translation
 from idiomapp.utils.state_utils import get_llm_client, get_provider_credentials
 from idiomapp.utils.logging_utils import get_logger, get_recent_logs, clear_logs
 from idiomapp.utils.graph_storage import get_graph_storage
-from idiomapp.utils.graph_viz import (
-    GRAPH_CLICK_JS,
+from idiomapp.models import (
+    AlignmentPair,
     CategoryPayload,
     CooccurrenceWordPayload,
     EdgeSelection,
@@ -30,7 +29,11 @@ from idiomapp.utils.graph_viz import (
     RecursiveLeafPayload,
     SemanticWordPayload,
     SourcedSelection,
+    Translation,
     WordKey,
+)
+from idiomapp.utils.graph_viz import (
+    GRAPH_CLICK_JS,
     apply_pinned_positions,
     build_cooccurrence_graph,
     build_graph_echarts_options,
@@ -754,7 +757,7 @@ async def translate_text(
     against `schema` internally (see llm_utils.py); Ollama/OpenAI return raw
     parsed JSON, so the result is re-validated through `Translation` here for
     every provider alike - that's also what makes `Translation.alignment`'s
-    tolerant parsing (schemas.py's `_to_alignment_pairs`) actually run.
+    tolerant parsing (models/llm.py's `_to_alignment_pairs`) actually run.
 
     Args:
         client: The LLM client (Ollama, OpenAI or Anthropic)
@@ -928,7 +931,7 @@ def visualize_translation_graph(graph_data):
     composed = compose_semantic_graph_with_expansions(
         base,
         st.session_state["graph_word_analyses"],
-        st.session_state["graph_expanded_categories"],
+        st.session_state["graph_open_categories"],
     )
     pinned = apply_pinned_positions(composed, st.session_state["graph_node_positions"])
     options = build_graph_echarts_options(graph_to_echarts_data(pinned))
@@ -1015,7 +1018,7 @@ def _dispatch_semantic_graph_click(selection) -> None:
     payload = selection.payload
 
     if isinstance(payload, CategoryPayload):
-        _toggle_expanded_category(payload.word_key, payload.category)
+        _toggle_open_category(payload.word_key, payload.category)
         st.rerun()
         return
 
@@ -1030,14 +1033,10 @@ def _dispatch_semantic_graph_click(selection) -> None:
         _analyze_word_for_graph(word_key)
 
 
-def _toggle_expanded_category(word_key: WordKey, category: str) -> None:
+def _toggle_open_category(word_key: WordKey, category: str) -> None:
     """Flip one category hub between shown-with-results and collapsed."""
-    expanded = st.session_state["graph_expanded_categories"]
-    key = (word_key, category)
-    if key in expanded:
-        expanded.discard(key)
-    else:
-        expanded.add(key)
+    open_categories = st.session_state["graph_open_categories"]
+    open_categories[word_key] = open_categories.get(word_key, set()) ^ {category}
 
 
 def _analyze_word_for_graph(word_key: WordKey) -> None:
@@ -3035,7 +3034,7 @@ def main():
         "help_dismissed": False,
         "graph_selection": None,
         "graph_word_analyses": {},
-        "graph_expanded_categories": set(),
+        "graph_open_categories": {},
         "graph_node_positions": {},
     }
     for key, value in default_session_state.items():

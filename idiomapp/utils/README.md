@@ -18,14 +18,18 @@ Natural Language Processing utilities based on [textacy](https://textacy.readthe
 
 ### `graph_viz.py`
 
-Adapters that turn this app's graph data into ECharts graph-series options
-(rendered via `streamlit-echarts`), plus the click-event resolver that makes a
-node/edge click round-trip back into Python:
+Builds graphs out of the typed models in `idiomapp/models/` and turns them into ECharts graph-series
+options (rendered via `streamlit-echarts`), plus the click-event resolver
+that makes a node/edge click round-trip back into Python:
 
-- `semantic_graph_to_echarts_data` / `cooccurrence_graph_to_echarts_data` /
-  `word_analysis_to_echarts_data`: per-source adapters that style nodes/edges
-- `build_graph_echarts_options`: the shared, purely-mechanical ECharts assembly
-- `resolve_graph_click`: turn a raw click event back into `{"kind", "data"}`
+- `build_semantic_graph` / `build_cooccurrence_graph`: build a styled
+  `networkx.MultiDiGraph` for each graph
+- `build_word_expansion` / `compose_semantic_graph_with_expansions`: layer
+  analyzed words' category hubs and leaves onto the semantic graph
+- `graph_to_echarts_data` / `build_graph_echarts_options`: flatten a graph
+  and assemble the ECharts options
+- `resolve_graph_click`: turn a raw click event back into a typed
+  `NodeSelection` or `EdgeSelection`
 
 ### `audio_utils.py`
 
