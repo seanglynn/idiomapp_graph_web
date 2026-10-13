@@ -1,5 +1,5 @@
 """
-Tests for the word-analysis schemas.
+Tests for the LLM output models in idiomagraph/models/llm.py.
 
 The point of `WordAnalysis` is that the three providers disagree about shape - Claude
 is schema-constrained (per group - see the `WordAnalysis` docstring for why), Ollama
@@ -12,7 +12,7 @@ import json
 
 import pytest
 
-from idiomagraph.utils.schemas import (
+from idiomagraph.models import (
     AlignmentPair,
     Entry,
     Grammar,

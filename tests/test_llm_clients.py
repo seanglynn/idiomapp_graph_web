@@ -47,9 +47,9 @@ def test_create_builds_ollama_client():
 
 
 def test_create_falls_back_to_ollama_for_unknown_provider():
-    with patch("idiomagraph.utils.llm_utils.get_available_models", return_value=[]), patch(
-        "idiomagraph.utils.llm_utils.pull_model_if_needed", return_value=False
-    ):
+    with patch(
+        "idiomagraph.utils.llm_utils.get_available_models", return_value=[]
+    ), patch("idiomagraph.utils.llm_utils.pull_model_if_needed", return_value=False):
         client = LLMClient.create(provider="not-a-provider")
     assert isinstance(client, OllamaClient)
 
@@ -334,9 +334,9 @@ async def test_ollama_generate_json_uses_json_format():
     )
     client._sdk_client, client._sdk_loop_key = sdk, "fixed"
 
-    with patch("idiomagraph.utils.llm_utils.loop_key", return_value="fixed"), patch.object(
-        OllamaClient, "_check_model_availability", return_value=True
-    ):
+    with patch(
+        "idiomagraph.utils.llm_utils.loop_key", return_value="fixed"
+    ), patch.object(OllamaClient, "_check_model_availability", return_value=True):
         assert await client.generate_json("hi") == {"translation": "hola"}
 
     assert sdk.chat.await_args.kwargs["format"] == "json"
@@ -430,7 +430,7 @@ async def test_claude_falls_back_when_schema_is_rejected():
     import anthropic
     import httpx
 
-    from idiomagraph.utils.schemas import WordAnalysis
+    from idiomagraph.models import WordAnalysis
 
     client = AnthropicClient("claude-haiku-4-5", api_key="k")
     sdk = MagicMock()
@@ -458,10 +458,10 @@ async def test_claude_falls_back_when_schema_is_rejected():
 async def test_claude_schema_path_returns_canonical_dict():
     """
     Uses `Usage`, not `WordAnalysis`, because that is what real word-analysis calls
-    actually send now - see the `WordAnalysis` docstring in schemas.py for why the
+    actually send now - see the `WordAnalysis` docstring in models/llm.py for why the
     combined model is never itself passed as a structured-output schema.
     """
-    from idiomagraph.utils.schemas import Usage
+    from idiomagraph.models import Usage
 
     client = AnthropicClient("claude-opus-5", api_key="k")
     parsed = MagicMock()
@@ -495,7 +495,7 @@ async def test_providers_agree_on_shape():
     actually asked for.
     """
     from idiomagraph.utils.nlp_utils import _get_llm_word_analysis
-    from idiomagraph.utils.schemas import (
+    from idiomagraph.models import (
         Grammar,
         LearnerNotes,
         Meaning,
@@ -534,9 +534,9 @@ async def test_providers_agree_on_shape():
     claude_sdk.messages.parse = AsyncMock(side_effect=fake_parse)
     claude_client._sdk_client, claude_client._sdk_loop_key = claude_sdk, "fixed"
 
-    with patch("idiomagraph.utils.llm_utils.loop_key", return_value="fixed"), patch.object(
-        OllamaClient, "_check_model_availability", return_value=True
-    ):
+    with patch(
+        "idiomagraph.utils.llm_utils.loop_key", return_value="fixed"
+    ), patch.object(OllamaClient, "_check_model_availability", return_value=True):
         via_ollama = await _get_llm_word_analysis("gato", "es", "NOUN", ollama_client)
         via_claude = await _get_llm_word_analysis("gato", "es", "NOUN", claude_client)
 

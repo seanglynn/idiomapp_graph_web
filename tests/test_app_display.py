@@ -21,8 +21,9 @@ guard, a script that unconditionally calls a toggle function on every run
 never converges and the test times out.
 
 (`_format_entry`/`_format_entries` moved to `idiomagraph.utils.graph_viz` and are
-covered by `tests/test_graph_viz.py` now, along with the typed selection/
-payload model these tests build fixtures out of.)
+covered by `tests/test_graph_viz.py` now. The typed selection/payload model
+these tests build fixtures out of lives in `idiomagraph.models`, covered by
+`tests/test_models_graph.py`.)
 """
 
 from streamlit.testing.v1 import AppTest
@@ -137,7 +138,7 @@ def test_grammar_tab_renders_for_unknown_pos_without_exception():
 # --------------------------------------------------------------------------
 _PANEL_IMPORTS = """
 import streamlit as st
-from idiomagraph.utils.graph_viz import (
+from idiomagraph.models import (
     CategoryPayload, EdgePayload, EdgeSelection, LeafNodePayload,
     NodeSelection, SemanticWordPayload, SourcedSelection, WordKey,
 )
@@ -284,10 +285,10 @@ def test_dispatch_toggles_a_category_on_then_off():
     # then click 2 (off) rather than repeating the same click.
     script = """
 import streamlit as st
-from idiomagraph.utils.graph_viz import WordKey, CategoryPayload, NodeSelection
+from idiomagraph.models import WordKey, CategoryPayload, NodeSelection
 from idiomagraph.streamlit.app import _dispatch_semantic_graph_click
 
-st.session_state.setdefault("graph_expanded_categories", set())
+st.session_state.setdefault("graph_open_categories", {})
 st.session_state.setdefault("clicks", 0)
 if "dispatched_this_run" not in st.session_state:
     st.session_state["dispatched_this_run"] = True
@@ -297,7 +298,7 @@ if "dispatched_this_run" not in st.session_state:
         payload=CategoryPayload(word_key=wk, category="synonyms", label="Synonyms")
     )
     _dispatch_semantic_graph_click(selection)
-st.write("expanded=" + str(st.session_state["graph_expanded_categories"]))
+st.write("open=" + str(st.session_state["graph_open_categories"]))
 """
     at = AppTest.from_string(script)
     at.run(timeout=30)  # click 1: toggles the category on
@@ -317,7 +318,7 @@ def test_dispatch_leaf_node_click_does_nothing():
     deliberate no-op, confirmed by nothing in session state changing."""
     script = """
 import streamlit as st
-from idiomagraph.utils.graph_viz import LeafNodePayload, NodeSelection
+from idiomagraph.models import LeafNodePayload, NodeSelection
 from idiomagraph.streamlit.app import _dispatch_semantic_graph_click
 
 st.session_state.setdefault("graph_word_analyses", {})
@@ -348,7 +349,7 @@ def test_dispatch_analyzes_a_fresh_word_through_the_shared_cache_path(monkeypatc
 
     script = """
 import streamlit as st
-from idiomagraph.utils.graph_viz import WordKey, SemanticWordPayload, NodeSelection
+from idiomagraph.models import WordKey, SemanticWordPayload, NodeSelection
 from idiomagraph.streamlit.app import _dispatch_semantic_graph_click
 
 st.session_state.setdefault("graph_word_analyses", {})
@@ -383,7 +384,7 @@ def test_dispatch_skips_an_already_analyzed_word_entirely(monkeypatch):
 
     script = """
 import streamlit as st
-from idiomagraph.utils.graph_viz import WordKey, SemanticWordPayload, NodeSelection
+from idiomagraph.models import WordKey, SemanticWordPayload, NodeSelection
 from idiomagraph.streamlit.app import _dispatch_semantic_graph_click
 
 st.session_state.setdefault("graph_word_analyses", {})

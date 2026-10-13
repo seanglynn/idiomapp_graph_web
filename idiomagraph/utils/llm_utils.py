@@ -264,7 +264,7 @@ class OllamaClient(LLMClient):
         `schema` is accepted for interface parity with the other clients but
         unused here - Ollama's JSON mode has no notion of a schema; the
         illustrative example built from a schema is composed by the caller (see
-        `schemas.prompt_example`, folded into `prompt` before this method ever
+        `models.llm.prompt_example`, folded into `prompt` before this method ever
         sees it), not by this method. `format="json"` guarantees syntactically
         valid JSON but not a particular shape, so a fenced response is still
         possible from some models; `extract_json` covers that one remaining case.

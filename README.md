@@ -144,7 +144,7 @@ flowchart TD
 1. **Translation.** Each target language gets one concurrent LLM call. The
    model returns JSON with the translation *and* a word-level alignment
    (`source_word → target_word`). This is validated by the `Translation`
-   schema in `idiomagraph/utils/schemas.py`, the same way for every provider.
+   schema in `idiomagraph/models/llm.py`, the same way for every provider.
 2. **NLP.** spaCy and textacy split the texts into sentences and tag parts of
    speech.
 3. **Semantic graph.** Aligned word pairs become **translation** edges. An
@@ -165,7 +165,7 @@ Deeper reading:
 <summary><b>📁 Project structure</b></summary>
 
 ```text
-idiomagraph/    # The app: config, Streamlit UI, and utility modules
+idiomagraph/    # The app: config, Streamlit UI, typed models, and utility modules
 tests/          # pytest suite, including Streamlit AppTest UI tests
 docs/           # In-depth docs and assets
 docker/         # Dockerfile + entrypoint

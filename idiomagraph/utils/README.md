@@ -4,7 +4,12 @@ This directory holds the modules behind the Streamlit app in
 `idiomagraph/streamlit/app.py`: LLM clients, NLP, graph building and
 rendering, persistence, and session state.
 
-## LLM and output schemas
+The typed models these modules work with (graph nodes, edges, click and
+expansion requests, and the LLM output schemas) live in
+[`idiomagraph/models/`](../models/__init__.py). Import them from the package:
+`from idiomagraph.models import WordKey, WordAnalysis`.
+
+## LLM
 
 ### `llm_utils.py`
 
@@ -23,15 +28,6 @@ Ollama server helpers:
 - `is_ollama_running` / `get_valid_ollama_host`: find a reachable Ollama host
 - `pull_model_if_needed`: download the configured model if it isn't installed
 - `get_available_models` / `get_model_list`: list installed models
-
-### `schemas.py`
-
-Pydantic models that every provider's JSON output is validated against:
-
-- `Translation` and `AlignmentPair`: a translation plus its word-level alignment
-- `WordAnalysis`: a structured word analysis, made of `Meaning`, `Usage`, `Grammar`, `Pronunciation` and `LearnerNotes`
-- `Entry`: the shared `{term, gloss}` item used inside analysis lists
-- `prompt_example`: render a model as an example JSON block for a prompt
 
 ### `json_utils.py`
 
@@ -54,18 +50,14 @@ spaCy and [textacy](https://textacy.readthedocs.io/) processing, plus graph cons
 
 ### `graph_viz.py`
 
-Typed graph building, click-to-explore expansion, and the ECharts adapter. See
-[`docs/graph_data_model.md`](../../docs/graph_data_model.md) for the full model.
+Builds graphs out of the typed models in `idiomagraph/models/`, expands them on click, and
+turns them into ECharts options. See [`docs/graph_data_model.md`](../../docs/graph_data_model.md)
+for the full model.
 
-- **Identity:** `WordKey`, `Position`
-- **Node payloads** (a Pydantic discriminated union on `kind`): `SemanticWordPayload`,
-  `CategoryPayload`, `RecursiveLeafPayload`, `LeafNodePayload`, `CooccurrenceWordPayload`
-- **Edge payload:** `EdgePayload`
-- **Rendering:** `StyledNode` and `StyledEdge`, which pair visual styling with a typed payload
-- **Click results:** `NodeSelection`, `EdgeSelection`, `SourcedSelection`
+- `StyledNode` / `StyledEdge`: visual styling paired with a typed payload
 - `build_semantic_graph` / `build_cooccurrence_graph`: build a `networkx.MultiDiGraph` for each view
-- `build_word_expansion`: category hubs and leaves for one analyzed word. Synonym and antonym
-  leaves (`RECURSIVE_LEAF_CATEGORIES`) can be analyzed in turn.
+- `build_word_expansion`: turn a `WordExpansionRequest` into category hubs and leaves for one
+  analyzed word. Synonym and antonym leaves (`RECURSIVE_LEAF_CATEGORIES`) can be analyzed in turn.
 - `compose_semantic_graph_with_expansions`: layer every expansion onto the base graph
 - `apply_pinned_positions`: keep already-seen nodes in place between reruns
 - `graph_to_echarts_data` / `build_graph_echarts_options`: turn the graph into ECharts options
@@ -129,6 +121,7 @@ Text-to-speech through gTTS:
 ```python
 from idiomagraph.utils.logging_utils import get_logger
 from idiomagraph.utils.nlp_utils import split_into_sentences
+from idiomagraph.models import WordKey, WordAnalysis
 from idiomagraph.utils.graph_viz import build_semantic_graph, resolve_graph_click
 from idiomagraph.utils.state_utils import get_llm_client
 

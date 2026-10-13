@@ -19,7 +19,7 @@ from langdetect import detect, LangDetectException
 from pydantic import ValidationError
 
 from idiomagraph.config import GROUP_COLORS as LANGUAGE_COLORS, LANG_MODELS
-from idiomagraph.utils.schemas import WordAnalysis, WORD_ANALYSIS_GROUPS, prompt_example
+from idiomagraph.models import WordAnalysis, WORD_ANALYSIS_GROUPS, prompt_example
 from idiomagraph.utils.analysis_cache import get_word_analysis_cache
 
 # Setup logging
@@ -1680,7 +1680,7 @@ async def _get_llm_word_analysis(
     Claude's structured-output endpoint rejects the combined schema outright (its
     compiled grammar is too large once every group sits under one call), while
     each group's schema alone is comfortably within the limit. See the
-    ``WordAnalysis`` docstring in ``schemas.py`` for the full story. Each prompt's
+    ``WordAnalysis`` docstring in ``models/llm.py`` for the full story. Each prompt's
     illustrative JSON is generated from the group's own schema via
     ``prompt_example()``, so the fields a provider is asked for can never drift
     from the fields the response is actually validated against.
