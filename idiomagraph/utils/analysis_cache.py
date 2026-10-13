@@ -22,7 +22,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from idiomapp.utils.logging_utils import get_logger
+from idiomagraph.utils.logging_utils import get_logger
 
 logger = get_logger("analysis_cache")
 

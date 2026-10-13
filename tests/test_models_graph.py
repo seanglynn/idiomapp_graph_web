@@ -1,5 +1,5 @@
 """
-Tests for the graph models in idiomapp/models/ (identity, nodes, edges,
+Tests for the graph models in idiomagraph/models/ (identity, nodes, edges,
 requests) - kept apart from the graph building and rendering in graph_viz.py.
 """
 
@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-import idiomapp.models
-from idiomapp.models import (
+import idiomagraph.models
+from idiomagraph.models import (
     RECURSIVE_LEAF_CATEGORIES,
     CategoryPayload,
     CooccurrenceWordPayload,
@@ -110,7 +110,7 @@ def test_sourced_selection_pairs_a_selection_with_its_graph():
 # --------------------------------------------------------------------------
 def test_models_do_not_import_graph_building_or_rendering():
     imported = set()
-    for path in Path(idiomapp.models.__file__).parent.glob("*.py"):
+    for path in Path(idiomagraph.models.__file__).parent.glob("*.py"):
         for node in ast.walk(ast.parse(path.read_text())):
             if isinstance(node, ast.Import):
                 imported.update(alias.name for alias in node.names)
@@ -120,6 +120,6 @@ def test_models_do_not_import_graph_building_or_rendering():
         "networkx",
         "streamlit",
         "streamlit_echarts",
-        "idiomapp.utils.graph_viz",
+        "idiomagraph.utils.graph_viz",
     }
     assert not imported & forbidden

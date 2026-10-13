@@ -11,7 +11,7 @@ email = ""' > "${HOME}/.streamlit/credentials.toml"
 mkdir -p /app/logs
 
 # Log startup information
-echo "Starting IdiomApp Graph Explorer in Docker"
+echo "Starting IdiomaGraph Graph Explorer in Docker"
 echo "- Streamlit server will be available at: http://localhost:${STREAMLIT_SERVER_PORT:-8503}"
 echo "- Server address binding: ${STREAMLIT_SERVER_ADDRESS:-0.0.0.0}"
 echo "- Log level: ${LOG_LEVEL:-INFO}"
@@ -43,7 +43,7 @@ fi
 
 # Execute the command provided (or default to streamlit run)
 if [ "$#" -eq 0 ]; then
-  exec streamlit run idiomapp/streamlit/app.py \
+  exec streamlit run idiomagraph/streamlit/app.py \
     --server.headless=${STREAMLIT_SERVER_HEADLESS:-true} \
     --server.port=${STREAMLIT_SERVER_PORT:-8503} \
     --server.address=${STREAMLIT_SERVER_ADDRESS:-0.0.0.0} \

@@ -10,8 +10,8 @@ from typing import Annotated, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
-from idiomapp.models.identity import WordKey
-from idiomapp.utils.logging_utils import get_logger
+from idiomagraph.models.identity import WordKey
+from idiomagraph.utils.logging_utils import get_logger
 
 logger = get_logger("models.nodes")
 
@@ -45,7 +45,7 @@ class CategoryPayload(BaseModel):
 
 # Which categories are safe to recurse into when a leaf is clicked: synonyms
 # and antonyms are always a single word in the *same* language (see
-# idiomapp.models.llm). Cognates look like single words too, but their
+# idiomagraph.models.llm). Cognates look like single words too, but their
 # language is a free-text gloss ("English", "French", ...) this app can't map
 # to a supported language code, so they're deliberately excluded. Everything
 # else (idioms, proverbs, examples, collocations, conjugations, forms) is a

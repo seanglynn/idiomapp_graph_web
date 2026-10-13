@@ -1,5 +1,5 @@
 """
-Global configuration module for Idiomapp.
+Global configuration module for Idiomagraph.
 
 This module uses pydantic-settings to manage configuration from environment variables and defaults.
 """
@@ -27,10 +27,10 @@ class LogLevel(str, Enum):
 
 
 class IdiomaAppSettings(BaseSettings):
-    """Global settings for the IdiomApp application."""
+    """Global settings for the IdiomaGraph application."""
 
     # General configuration
-    app_name: str = "IdiomApp"
+    app_name: str = "IdiomaGraph"
     log_level: LogLevel = LogLevel.INFO
 
     # Streamlit configuration

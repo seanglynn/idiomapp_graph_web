@@ -3,9 +3,9 @@
 from dataclasses import dataclass
 from typing import Literal, Optional, Union
 
-from idiomapp.models.edges import EdgePayload
-from idiomapp.models.identity import Position, WordKey
-from idiomapp.models.nodes import NodePayload
+from idiomagraph.models.edges import EdgePayload
+from idiomagraph.models.identity import Position, WordKey
+from idiomagraph.models.nodes import NodePayload
 
 
 @dataclass(frozen=True)

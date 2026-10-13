@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
-    container_name: idiomapp-streamlit
+    container_name: idiomagraph-streamlit
     ports:
       - "${STREAMLIT_SERVER_PORT:-8503}:${STREAMLIT_SERVER_PORT:-8503}"
     volumes:
@@ -15,11 +15,11 @@ services:
     depends_on:
       - ollama
     networks:
-      - idiomapp-network
+      - idiomagraph-network
 
   ollama:
     image: ollama/ollama:latest
-    container_name: idiomapp-ollama
+    container_name: idiomagraph-ollama
     # No host port mapping: the streamlit service reaches this over the internal
     # Docker network at ollama:11434, and mapping 11434 to the host conflicts with
     # a native Ollama install already using that port there. Add back
@@ -28,7 +28,7 @@ services:
     volumes:
       - ./ollama-models:/root/.ollama
     networks:
-      - idiomapp-network
+      - idiomagraph-network
     # Uncomment this section if you have an NVIDIA GPU
     # deploy:
     #   resources:
@@ -39,5 +39,5 @@ services:
     #           capabilities: [gpu]
 
 networks:
-  idiomapp-network:
+  idiomagraph-network:
     driver: bridge 

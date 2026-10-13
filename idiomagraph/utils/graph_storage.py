@@ -1,5 +1,5 @@
 """
-Graph storage utilities for IdiomApp using abstract base class pattern.
+Graph storage utilities for IdiomaGraph using abstract base class pattern.
 Provides both immediate access and persistent storage for graph data.
 """
 
@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Any
 from pathlib import Path
 
-from idiomapp.utils.logging_utils import get_logger
+from idiomagraph.utils.logging_utils import get_logger
 
 # Set up logging using the cached logger
 logger = get_logger("graph_storage")

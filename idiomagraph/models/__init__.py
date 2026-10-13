@@ -9,17 +9,17 @@
   `Translation`, ...)
 
 None of these import networkx, Streamlit, or any rendering code; graph
-building and drawing live in `idiomapp.utils.graph_viz`. Payloads that cross
+building and drawing live in `idiomagraph.utils.graph_viz`. Payloads that cross
 the browser boundary as JSON are Pydantic models, and everything that only
 lives inside Python is a plain dataclass - see `docs/graph_data_model.md`.
 
-Import from this package (`from idiomapp.models import WordKey`) rather than
+Import from this package (`from idiomagraph.models import WordKey`) rather than
 from the individual files.
 """
 
-from idiomapp.models.edges import EdgePayload, parse_edge_payload
-from idiomapp.models.identity import Position, WordKey
-from idiomapp.models.llm import (
+from idiomagraph.models.edges import EdgePayload, parse_edge_payload
+from idiomagraph.models.identity import Position, WordKey
+from idiomagraph.models.llm import (
     WORD_ANALYSIS_GROUPS,
     AlignmentPair,
     Entry,
@@ -32,7 +32,7 @@ from idiomapp.models.llm import (
     WordAnalysis,
     prompt_example,
 )
-from idiomapp.models.nodes import (
+from idiomagraph.models.nodes import (
     RECURSIVE_LEAF_CATEGORIES,
     CategoryPayload,
     CooccurrenceWordPayload,
@@ -42,7 +42,7 @@ from idiomapp.models.nodes import (
     SemanticWordPayload,
     parse_node_payload,
 )
-from idiomapp.models.requests import (
+from idiomagraph.models.requests import (
     EdgeSelection,
     GraphSelection,
     NodeSelection,

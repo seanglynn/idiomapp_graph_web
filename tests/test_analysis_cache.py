@@ -1,5 +1,5 @@
 """
-Tests for the persisted word-analysis cache (idiomapp/utils/analysis_cache.py)
+Tests for the persisted word-analysis cache (idiomagraph/utils/analysis_cache.py)
 and its wiring into nlp_utils.analyze_word_linguistics.
 """
 
@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from idiomapp.utils.analysis_cache import (
+from idiomagraph.utils.analysis_cache import (
     FileWordAnalysisCache,
     InMemoryWordAnalysisCache,
 )
@@ -86,7 +86,7 @@ def test_file_cache_creates_its_storage_directory(tmp_path):
 async def test_analyze_word_linguistics_caches_a_successful_llm_result():
     import spacy
 
-    from idiomapp.utils.nlp_utils import analyze_word_linguistics
+    from idiomagraph.utils.nlp_utils import analyze_word_linguistics
 
     cache = InMemoryWordAnalysisCache()
     client = MagicMock()
@@ -96,8 +96,8 @@ async def test_analyze_word_linguistics_caches_a_successful_llm_result():
     )
 
     with patch(
-        "idiomapp.utils.nlp_utils.load_spacy_model", return_value=spacy.blank("es")
-    ), patch("idiomapp.utils.nlp_utils.get_word_analysis_cache", return_value=cache):
+        "idiomagraph.utils.nlp_utils.load_spacy_model", return_value=spacy.blank("es")
+    ), patch("idiomagraph.utils.nlp_utils.get_word_analysis_cache", return_value=cache):
         await analyze_word_linguistics("gato", "es", client)
 
     assert cache.get("gato", "es", "anthropic", "m") is not None
@@ -110,7 +110,7 @@ async def test_analyze_word_linguistics_caches_a_successful_llm_result():
 async def test_analyze_word_linguistics_serves_a_cache_hit_without_calling_the_llm():
     import spacy
 
-    from idiomapp.utils.nlp_utils import analyze_word_linguistics
+    from idiomagraph.utils.nlp_utils import analyze_word_linguistics
 
     cache = InMemoryWordAnalysisCache()
     cache.set(
@@ -127,9 +127,9 @@ async def test_analyze_word_linguistics_serves_a_cache_hit_without_calling_the_l
     )
 
     with patch(
-        "idiomapp.utils.nlp_utils.load_spacy_model", return_value=spacy.blank("es")
+        "idiomagraph.utils.nlp_utils.load_spacy_model", return_value=spacy.blank("es")
     ) as mock_load_spacy, patch(
-        "idiomapp.utils.nlp_utils.get_word_analysis_cache", return_value=cache
+        "idiomagraph.utils.nlp_utils.get_word_analysis_cache", return_value=cache
     ):
         analysis = await analyze_word_linguistics("gato", "es", client)
 
@@ -144,7 +144,7 @@ async def test_analyze_word_linguistics_does_not_cache_an_llm_error():
     should retry the LLM rather than silently reusing a degraded result."""
     import spacy
 
-    from idiomapp.utils.nlp_utils import analyze_word_linguistics
+    from idiomagraph.utils.nlp_utils import analyze_word_linguistics
 
     cache = InMemoryWordAnalysisCache()
     client = MagicMock()
@@ -154,8 +154,8 @@ async def test_analyze_word_linguistics_does_not_cache_an_llm_error():
     )
 
     with patch(
-        "idiomapp.utils.nlp_utils.load_spacy_model", return_value=spacy.blank("es")
-    ), patch("idiomapp.utils.nlp_utils.get_word_analysis_cache", return_value=cache):
+        "idiomagraph.utils.nlp_utils.load_spacy_model", return_value=spacy.blank("es")
+    ), patch("idiomagraph.utils.nlp_utils.get_word_analysis_cache", return_value=cache):
         await analyze_word_linguistics("gato", "es", client)
 
     assert cache.get("gato", "es", "anthropic", "m") is None
@@ -165,13 +165,13 @@ async def test_analyze_word_linguistics_does_not_cache_an_llm_error():
 async def test_analyze_word_linguistics_without_a_client_never_touches_the_cache():
     import spacy
 
-    from idiomapp.utils.nlp_utils import analyze_word_linguistics
+    from idiomagraph.utils.nlp_utils import analyze_word_linguistics
 
     cache = InMemoryWordAnalysisCache()
 
     with patch(
-        "idiomapp.utils.nlp_utils.load_spacy_model", return_value=spacy.blank("es")
-    ), patch("idiomapp.utils.nlp_utils.get_word_analysis_cache", return_value=cache):
+        "idiomagraph.utils.nlp_utils.load_spacy_model", return_value=spacy.blank("es")
+    ), patch("idiomagraph.utils.nlp_utils.get_word_analysis_cache", return_value=cache):
         await analyze_word_linguistics("gato", "es", client=None)
 
     assert cache.get_stats()["total_entries"] == 0

@@ -1,10 +1,10 @@
 """
-Tests for the word-analysis display layer in idiomapp/streamlit/app.py, and
+Tests for the word-analysis display layer in idiomagraph/streamlit/app.py, and
 for the Semantic Graph's click-to-explore behavior (the selection panel and
 the click dispatcher that drives auto-analysis/category toggling).
 
 `streamlit.testing.v1.AppTest`-based tests throughout - Streamlit's official
-headless test harness. Importing from `idiomapp.streamlit.app` does not run
+headless test harness. Importing from `idiomagraph.streamlit.app` does not run
 `main()`: Streamlit only executes a script's `if __name__ == "__main__"` block
 when that script is the actual run target, which a plain import does not set -
 so this never touches Ollama, spaCy, or any network/session-dependent code,
@@ -20,9 +20,9 @@ case, flipping it right back - again. Confirmed empirically: without this
 guard, a script that unconditionally calls a toggle function on every run
 never converges and the test times out.
 
-(`_format_entry`/`_format_entries` moved to `idiomapp.utils.graph_viz` and are
+(`_format_entry`/`_format_entries` moved to `idiomagraph.utils.graph_viz` and are
 covered by `tests/test_graph_viz.py` now. The typed selection/payload model
-these tests build fixtures out of lives in `idiomapp.models`, covered by
+these tests build fixtures out of lives in `idiomagraph.models`, covered by
 `tests/test_models_graph.py`.)
 """
 
@@ -60,7 +60,7 @@ RICH_ANALYSIS = {
 
 def _run(analysis_data: dict, word: str = "hablar", language: str = "es") -> AppTest:
     script = f"""
-from idiomapp.streamlit.app import display_word_analysis
+from idiomagraph.streamlit.app import display_word_analysis
 display_word_analysis({word!r}, {language!r}, {analysis_data!r})
 """
     at = AppTest.from_string(script)
@@ -138,11 +138,11 @@ def test_grammar_tab_renders_for_unknown_pos_without_exception():
 # --------------------------------------------------------------------------
 _PANEL_IMPORTS = """
 import streamlit as st
-from idiomapp.models import (
+from idiomagraph.models import (
     CategoryPayload, EdgePayload, EdgeSelection, LeafNodePayload,
     NodeSelection, SemanticWordPayload, SourcedSelection, WordKey,
 )
-from idiomapp.streamlit.app import _render_graph_selection_panel
+from idiomagraph.streamlit.app import _render_graph_selection_panel
 """
 
 
@@ -285,8 +285,8 @@ def test_dispatch_toggles_a_category_on_then_off():
     # then click 2 (off) rather than repeating the same click.
     script = """
 import streamlit as st
-from idiomapp.models import WordKey, CategoryPayload, NodeSelection
-from idiomapp.streamlit.app import _dispatch_semantic_graph_click
+from idiomagraph.models import WordKey, CategoryPayload, NodeSelection
+from idiomagraph.streamlit.app import _dispatch_semantic_graph_click
 
 st.session_state.setdefault("graph_open_categories", {})
 st.session_state.setdefault("clicks", 0)
@@ -318,8 +318,8 @@ def test_dispatch_leaf_node_click_does_nothing():
     deliberate no-op, confirmed by nothing in session state changing."""
     script = """
 import streamlit as st
-from idiomapp.models import LeafNodePayload, NodeSelection
-from idiomapp.streamlit.app import _dispatch_semantic_graph_click
+from idiomagraph.models import LeafNodePayload, NodeSelection
+from idiomagraph.streamlit.app import _dispatch_semantic_graph_click
 
 st.session_state.setdefault("graph_word_analyses", {})
 selection = NodeSelection(payload=LeafNodePayload(category="idioms", text="x"))
@@ -336,7 +336,7 @@ def test_dispatch_analyzes_a_fresh_word_through_the_shared_cache_path(monkeypatc
     """The one call path for graph-driven analysis: analyze_word_linguistics,
     the exact function the dropdown+button flow already uses - confirms no
     separate/duplicate LLM-calling path was introduced for the graph."""
-    import idiomapp.streamlit.app as app_module
+    import idiomagraph.streamlit.app as app_module
 
     calls = []
 
@@ -349,8 +349,8 @@ def test_dispatch_analyzes_a_fresh_word_through_the_shared_cache_path(monkeypatc
 
     script = """
 import streamlit as st
-from idiomapp.models import WordKey, SemanticWordPayload, NodeSelection
-from idiomapp.streamlit.app import _dispatch_semantic_graph_click
+from idiomagraph.models import WordKey, SemanticWordPayload, NodeSelection
+from idiomagraph.streamlit.app import _dispatch_semantic_graph_click
 
 st.session_state.setdefault("graph_word_analyses", {})
 st.session_state["model_available"] = True
@@ -375,7 +375,7 @@ def test_dispatch_skips_an_already_analyzed_word_entirely(monkeypatch):
     """The explicit "everything is cachable" requirement, in its strongest
     form: re-clicking an already-analyzed word doesn't just hit a fast cache -
     it doesn't call analyze_word_linguistics at all."""
-    import idiomapp.streamlit.app as app_module
+    import idiomagraph.streamlit.app as app_module
 
     async def should_not_be_called(word, language, client):
         raise AssertionError("analyze_word_linguistics should not be called")
@@ -384,8 +384,8 @@ def test_dispatch_skips_an_already_analyzed_word_entirely(monkeypatch):
 
     script = """
 import streamlit as st
-from idiomapp.models import WordKey, SemanticWordPayload, NodeSelection
-from idiomapp.streamlit.app import _dispatch_semantic_graph_click
+from idiomagraph.models import WordKey, SemanticWordPayload, NodeSelection
+from idiomagraph.streamlit.app import _dispatch_semantic_graph_click
 
 st.session_state.setdefault("graph_word_analyses", {})
 st.session_state["graph_word_analyses"][WordKey.of("luna", "es")] = {"pos": "NOUN"}
@@ -407,7 +407,7 @@ st.write("no crash, no rerun loop")
 # --------------------------------------------------------------------------
 _FILTER_EDGES_SCRIPT = """
 import streamlit as st
-from idiomapp.streamlit.app import _filter_edges
+from idiomagraph.streamlit.app import _filter_edges
 
 edges = [
     {{"relation": "translation", "strength": 1.0}},

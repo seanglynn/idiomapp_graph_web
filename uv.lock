@@ -427,7 +427,7 @@ wheels = [
 ]
 
 [[package]]
-name = "idiomapp"
+name = "idiomagraph"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

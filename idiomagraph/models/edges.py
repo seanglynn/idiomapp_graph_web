@@ -4,7 +4,7 @@ from typing import Optional
 
 from pydantic import BaseModel, ValidationError
 
-from idiomapp.utils.logging_utils import get_logger
+from idiomagraph.utils.logging_utils import get_logger
 
 logger = get_logger("models.edges")
 

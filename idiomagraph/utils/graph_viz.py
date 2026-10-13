@@ -1,5 +1,5 @@
 """Builds the three graphs (Semantic, Co-occurrence, and the in-graph
-word-exploration nodes) out of the typed models in `idiomapp.models`, styles
+word-exploration nodes) out of the typed models in `idiomagraph.models`, styles
 them, and turns them into ECharts graph-series options.
 
 Pure Python - no `streamlit` or `streamlit_echarts` import here, so every
@@ -9,7 +9,7 @@ being built and grown; `graph_to_echarts_data` is the *only* place that graph
 gets flattened into the plain JSON dict a browser-based JS component needs.
 See `docs/graph_data_model.md` for a diagram of how all these types relate.
 
-What the graph *is* lives in `idiomapp.models`; this module only adds how
+What the graph *is* lives in `idiomagraph.models`; this module only adds how
 it's drawn - `StyledNode`/`StyledEdge` are plain dataclasses pairing a model
 payload with its color, size, and tooltip.
 """
@@ -20,13 +20,13 @@ from typing import Any, Literal, Optional
 
 import networkx as nx
 
-from idiomapp.config import (
+from idiomagraph.config import (
     GROUP_COLORS,
     LANGUAGE_MAP,
     POS_BORDER_COLORS,
     RELATION_COLORS,
 )
-from idiomapp.models import (
+from idiomagraph.models import (
     RECURSIVE_LEAF_CATEGORIES,
     CategoryPayload,
     CooccurrenceWordPayload,
@@ -44,8 +44,8 @@ from idiomapp.models import (
     parse_edge_payload,
     parse_node_payload,
 )
-from idiomapp.utils.logging_utils import get_logger
-from idiomapp.utils.nlp_utils import get_language_color
+from idiomagraph.utils.logging_utils import get_logger
+from idiomagraph.utils.nlp_utils import get_language_color
 
 logger = get_logger("graph_viz")
 

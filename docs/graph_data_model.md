@@ -5,7 +5,7 @@ Co-occurrence Network visualizations, and behind clicking a word to explore
 its details (synonyms, etymology, examples, ...) right inside the graph.
 It's split in two:
 
-- `idiomapp/models/` - what the graph *is*, one file per kind of model:
+- `idiomagraph/models/` - what the graph *is*, one file per kind of model:
   - `identity.py` - `WordKey`, `Position`
   - `nodes.py` - the `NodePayload` variants and `parse_node_payload`
   - `edges.py` - `EdgePayload` and `parse_edge_payload`
@@ -13,8 +13,8 @@ It's split in two:
     `WordExpansionRequest`
 
   No networkx, no rendering. Import them from the package:
-  `from idiomapp.models import WordKey`.
-- `idiomapp/utils/graph_viz.py` - how it's built and drawn: `StyledNode` /
+  `from idiomagraph.models import WordKey`.
+- `idiomagraph/utils/graph_viz.py` - how it's built and drawn: `StyledNode` /
   `StyledEdge`, graph building, and the ECharts adapters.
 
 ## Two kinds of typed object, on purpose
@@ -183,10 +183,10 @@ classDiagram
 3. `resolve_graph_click` parses that dict back into a `NodeSelection` or
    `EdgeSelection`, reconstructing whichever `NodePayload`/`EdgePayload`
    variant it actually is (via `parse_node_payload`/`parse_edge_payload` in
-   `idiomapp/models/`). A click that doesn't parse (a malformed or
+   `idiomagraph/models/`). A click that doesn't parse (a malformed or
    unrecognized event) is logged and treated as "nothing happened," not a
    crash.
-4. `idiomapp/streamlit/app.py`'s `_dispatch_semantic_graph_click` pattern-
+4. `idiomagraph/streamlit/app.py`'s `_dispatch_semantic_graph_click` pattern-
    matches on the payload type to decide what a click *means*:
    - `SemanticWordPayload` / `RecursiveLeafPayload` → analyze this word
      (through the same cache-backed `analyze_word_linguistics` call the

@@ -1,5 +1,5 @@
 """
-Logging utilities for the Idiomapp application.
+Logging utilities for the Idiomagraph application.
 """
 import os
 import sys
@@ -35,7 +35,7 @@ LOG_DIR.mkdir(exist_ok=True)
 def _get_log_level():
     """Get log level with fallback handling."""
     try:
-        from idiomapp.config import settings
+        from idiomagraph.config import settings
 
         return LOG_LEVELS.get(settings.log_level.value, logging.INFO)
     except ImportError:
@@ -65,7 +65,7 @@ class RecentLogsHandler(logging.Handler):
 
 
 @lru_cache(maxsize=1)
-def get_logger(module_name="idiomapp"):
+def get_logger(module_name="idiomagraph"):
     """
     Get or create a logger for the specified module using LRU cache for efficiency.
 
@@ -117,7 +117,7 @@ def get_logger(module_name="idiomapp"):
     return logger
 
 
-def setup_logging(module_name="idiomapp"):
+def setup_logging(module_name="idiomagraph"):
     """
     Set up logging for the application (legacy function that now uses get_logger).
 

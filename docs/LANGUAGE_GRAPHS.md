@@ -1,4 +1,4 @@
-# Language Graphs in Idiomapp
+# Language Graphs in Idiomagraph
 
 Visualizing language connections through powerful interactive networks!
 
@@ -9,7 +9,7 @@ Visualizing language connections through powerful interactive networks!
 - **Nodes** = words in different languages
 - **Edges** = translation relationships and meaning connections
 
-When you translate text in Idiomapp, it creates a semantic network that shows:
+When you translate text in Idiomagraph, it creates a semantic network that shows:
 
 - Direct translations between languages (e.g., "dog" → "perro")
 - Related words within each language

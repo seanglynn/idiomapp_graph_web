@@ -1,5 +1,5 @@
 """
-LLM provider clients for IdiomApp.
+LLM provider clients for IdiomaGraph.
 
 Three providers sit behind one small interface: Ollama (local), OpenAI, and
 Anthropic (Claude). Every client is genuinely async - the SDK clients are the async
@@ -13,7 +13,7 @@ Two details worth knowing before editing:
   rebind if it is used from a different loop.
 * Claude models reject unsupported request parameters with a 400 rather than
   ignoring them, so `AnthropicClient` builds its kwargs through the capability
-  gate in `idiomapp.config`.
+  gate in `idiomagraph.config`.
 """
 
 from abc import ABC, abstractmethod
@@ -31,16 +31,16 @@ import anthropic
 from anthropic import AsyncAnthropic
 from pydantic import BaseModel
 
-from idiomapp.utils.logging_utils import get_logger
-from idiomapp.utils.json_utils import extract_json
-from idiomapp.utils.async_utils import loop_key
-from idiomapp.config import (
+from idiomagraph.utils.logging_utils import get_logger
+from idiomagraph.utils.json_utils import extract_json
+from idiomagraph.utils.async_utils import loop_key
+from idiomagraph.config import (
     settings,
     LLMProvider,
     get_model_capabilities,
     anthropic_supports_effort,
 )
-from idiomapp.utils.ollama_utils import (
+from idiomagraph.utils.ollama_utils import (
     get_valid_ollama_host,
     get_available_models,
     pull_model_if_needed,
@@ -559,7 +559,7 @@ class AnthropicClient(LLMClient):
         Assemble request params for this model.
 
         Only parameters this model actually accepts are included - see the class
-        docstring and ANTHROPIC_MODEL_CAPABILITIES in idiomapp.config.
+        docstring and ANTHROPIC_MODEL_CAPABILITIES in idiomagraph.config.
         """
         params: Dict[str, Any] = {
             "model": self.model_name,

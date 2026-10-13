@@ -1,5 +1,5 @@
 """
-Tests for idiomapp/utils/graph_viz.py - the typed graph data model and the
+Tests for idiomagraph/utils/graph_viz.py - the typed graph data model and the
 adapters that turn it into ECharts graph-series options.
 
 Pure pytest throughout: no Streamlit runtime, no ECharts JS involved. These
@@ -10,7 +10,7 @@ graph-viz migration plans) and isn't something a unit test can exercise.
 
 import networkx as nx
 
-from idiomapp.models import (
+from idiomagraph.models import (
     CategoryPayload,
     CooccurrenceWordPayload,
     EdgePayload,
@@ -23,7 +23,7 @@ from idiomapp.models import (
     WordExpansionRequest,
     WordKey,
 )
-from idiomapp.utils.graph_viz import (
+from idiomagraph.utils.graph_viz import (
     GRAPH_CATEGORIES,
     GRAPH_CLICK_JS,
     adjust_color,
